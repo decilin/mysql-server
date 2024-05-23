@@ -6563,7 +6563,7 @@ uint Table_ref::leaf_tables_count() const {
   @return non zero   error
 */
 
-int Table_ref::fetch_number_of_rows(ha_rows fallback_estimate) {
+int Table_ref::fetch_number_of_rows(ha_rows fallback_estimate) {  // 获取表中的行数
   if (is_table_function()) {
     // FIXME: open question - there's no estimate for table function.
     // return arbitrary, non-zero number;

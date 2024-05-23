@@ -594,10 +594,11 @@ class PT_joined_table : public PT_table_reference {
     static_assert(has_single_bit(unsigned{JTT_NATURAL}), "not a single bit");
     static_assert(has_single_bit(unsigned{JTT_LEFT}), "not a single bit");
     static_assert(has_single_bit(unsigned{JTT_RIGHT}), "not a single bit");
+    static_assert(has_single_bit(unsigned{JTT_FULL}), "not a single bit");
 
-    assert(type == JTT_INNER || type == JTT_STRAIGHT_INNER ||
+    assert(type == JTT_INNER || type == JTT_STRAIGHT_INNER || type == JTT_NATURAL_FULL ||
            type == JTT_NATURAL_INNER || type == JTT_NATURAL_LEFT ||
-           type == JTT_NATURAL_RIGHT || type == JTT_LEFT || type == JTT_RIGHT);
+           type == JTT_NATURAL_RIGHT || type == JTT_LEFT || type == JTT_RIGHT || type == JTT_FULL);
   }
 
   /**

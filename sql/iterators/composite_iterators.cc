@@ -83,6 +83,7 @@ using pack_rows::TableCollection;
 using std::any_of;
 using std::string;
 using std::vector;
+using std::swap;
 
 int FilterIterator::Read() {
   for (;;) {
@@ -474,20 +475,30 @@ bool NestedLoopIterator::Init() {
   return false;
 }
 
-int NestedLoopIterator::Read() {
+int NestedLoopIterator::Read() {  // 返回 1 为 异常，-1 为读取完成, 0 为读取到正常数据
   if (m_state == END_OF_ROWS) {
     return -1;
   }
 
   for (;;) {  // Termination condition within loop.
-    if (m_state == NEEDS_OUTER_ROW) {
-      int err = m_source_outer->Read();
-      if (err == 1) {
+    if (m_state == NEEDS_OUTER_ROW) {  // 从 outer 中读取一行
+      int err = m_source_outer->Read(); // 从 outer 中读取一行
+      if (err == 1) { // err 1 为 异常，-1 为读取完成, 0 为读取到正常数据
         return 1;  // Error.
       }
       if (err == -1) {
-        m_state = END_OF_ROWS;
-        return -1;
+        if (m_join_type == JoinType::FULL_OUTER) {
+          m_join_type = JoinType::ANTI;
+          m_state = NEEDS_OUTER_ROW;
+          m_source_outer.swap(m_source_inner);
+          if (m_source_outer->Init()) return 1;
+          if (m_source_inner->Init()) return 1;
+          continue;
+        }
+        else {
+          m_state = END_OF_ROWS;
+          return -1;
+        }
       }
       if (m_pfs_batch_mode) {
         m_source_inner->StartPSIBatchMode();
@@ -495,7 +506,7 @@ int NestedLoopIterator::Read() {
 
       // Init() could read the NULL row flags (e.g., when building a hash
       // map), so unset them before instead of after.
-      m_source_inner->SetNullRowFlag(false);
+      m_source_inner->SetNullRowFlag(false);  // inner 设置 NullRowFlag 为 false
 
       if (m_source_inner->Init()) {
         return 1;
@@ -504,36 +515,36 @@ int NestedLoopIterator::Read() {
     }
     assert(m_state == READING_INNER_ROWS || m_state == READING_FIRST_INNER_ROW);
 
-    int err = m_source_inner->Read();
-    if (err != 0 && m_pfs_batch_mode) {
+    int err = m_source_inner->Read();  // 从 inner 中读取一行
+    if (err != 0 && m_pfs_batch_mode) { // 如果没有正常读取到数据
       m_source_inner->EndPSIBatchModeIfStarted();
     }
-    if (err == 1) {
+    if (err == 1) { // 如果读取异常
       return 1;  // Error.
     }
-    if (thd()->killed) {  // Aborted by user.
+    if (thd()->killed) {  // Aborted by user. // 如果会话被 kill
       thd()->send_kill_message();
       return 1;
     }
-    if (err == -1) {
+    if (err == -1) {  // 如果 inner 读取完所有数据
       // Out of inner rows for this outer row. If we are an outer join
       // and never found any inner rows, return a null-complemented row.
       // If not, skip that and go straight to reading a new outer row.
-      if ((m_join_type == JoinType::OUTER &&
-           m_state == READING_FIRST_INNER_ROW) ||
+      if (((m_join_type == JoinType::OUTER || m_join_type == JoinType::FULL_OUTER) &&  // 如果是 JoinType::OUTER 且 m_state == READING_FIRST_INNER_ROW，则表示在 innser 没读取到任何数据
+           m_state == READING_FIRST_INNER_ROW) || // 或者是 JoinType::ANTI
           m_join_type == JoinType::ANTI) {
-        m_source_inner->SetNullRowFlag(true);
-        m_state = NEEDS_OUTER_ROW;
+        m_source_inner->SetNullRowFlag(true); // m_source_inner 设置 NullRowFlag 为 true
+        m_state = NEEDS_OUTER_ROW;  // 然后把状态切回到 outer 继续读取数据，返回
         return 0;
-      } else {
-        m_state = NEEDS_OUTER_ROW;
+      } else {  // 如果 1、不是 JoinType::ANTI，且 2、非 JoinType::OUTER 或非 READING_FIRST_INNER_ROW
+        m_state = NEEDS_OUTER_ROW;  // 把状态切回到 outer 继续读取数据，继续循环
         continue;
       }
     }
 
     // An inner row has been found.
 
-    if (m_join_type == JoinType::ANTI) {
+    if (m_join_type == JoinType::ANTI) {  // 如果 inner 读取到正常数据，该迭代器是 JoinType::ANTI，则把状态切回到 outer 继续读取数据
       // Anti-joins should stop scanning the inner side as soon as we see
       // a row, without returning that row.
       m_state = NEEDS_OUTER_ROW;
@@ -542,7 +553,7 @@ int NestedLoopIterator::Read() {
 
     // We have a new row. Semijoins should stop after the first row;
     // regular joins (inner and outer) should go on to scan the rest.
-    if (m_join_type == JoinType::SEMI) {
+    if (m_join_type == JoinType::SEMI) {  // 如果 inner 读取到正常数据，该迭代器 1、如果是 JoinType::SEMI，则把状态切回到 outer 继续读取数据 2、其它类型：继续读取 inner
       m_state = NEEDS_OUTER_ROW;
     } else {
       m_state = READING_INNER_ROWS;

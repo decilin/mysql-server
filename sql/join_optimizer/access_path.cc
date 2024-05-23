@@ -905,6 +905,9 @@ unique_ptr_destroy_only<RowIterator> CreateIteratorFromAccessPath(
             join_type =
                 param.rewrite_semi_to_inner ? JoinType::INNER : JoinType::SEMI;
             break;
+          case RelationalExpression::FULL_OUTER_JOIN:
+            join_type = JoinType::FULL_OUTER;
+            break;
           case RelationalExpression::TABLE:
           default:
             assert(false);

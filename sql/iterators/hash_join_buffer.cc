@@ -110,7 +110,7 @@ void LoadBufferRowIntoTableBuffers(const TableCollection &tables,
   assert(end == data + row.size());
 }
 
-void LoadImmutableStringIntoTableBuffers(const TableCollection &tables,
+void LoadImmutableStringIntoTableBuffers(const TableCollection &tables, // 把 row 装载进 TableBuffers
                                          LinkedImmutableString row) {
   LoadIntoTableBuffers(tables, pointer_cast<const uchar *>(row.Decode().data));
 }
@@ -129,8 +129,8 @@ HashJoinRowBuffer::HashJoinRowBuffer(
   m_mem_root.set_max_capacity(0);
 }
 
-bool HashJoinRowBuffer::Init() {
-  if (m_hash_map.get() != nullptr) {
+bool HashJoinRowBuffer::Init() {  // 1、如果 m_hash_map 不为空，则清理里面的内存 2、计算需要的存储空间 3、实例化 m_hash_map 4、设置 m_last_row_stored 为 LinkedImmutableString{nullptr}
+  if (m_hash_map.get() != nullptr) {  // 如果 m_hash_map 不为空，则清理里面的内存
     // Reset the unique_ptr, so that the hash map destructors are called before
     // clearing the MEM_ROOT.
     m_hash_map.reset(nullptr);
@@ -145,7 +145,7 @@ bool HashJoinRowBuffer::Init() {
 
   // NOTE: Will be ignored and re-calculated if there are any blobs in the
   // table.
-  m_row_size_upper_bound = ComputeRowSizeUpperBound(m_tables);
+  m_row_size_upper_bound = ComputeRowSizeUpperBound(m_tables);  // 计算需要的存储空间
 
   m_hash_map.reset(new hash_map_type(
       /*bucket_count=*/10, KeyHasher()));
@@ -158,13 +158,13 @@ bool HashJoinRowBuffer::Init() {
   return false;
 }
 
-StoreRowResult HashJoinRowBuffer::StoreRow(THD *thd,
+StoreRowResult HashJoinRowBuffer::StoreRow(THD *thd, // 1、遍历  m_join_conditions，通过 m_tables.tables_bitmap() 检查对应 HASH 字段的值是否有 NULL 2、把 key 插入 m_hash_map
                                            bool reject_duplicate_keys) {
   bool full = false;
 
   // Make the key from the join conditions.
   m_buffer.length(0);
-  for (const HashJoinCondition &hash_join_condition : m_join_conditions) {
+  for (const HashJoinCondition &hash_join_condition : m_join_conditions) { // 遍历  m_join_conditions，通过 m_tables.tables_bitmap() 检查对应 HASH 字段的值是否有 NULL
     bool null_in_join_condition =
         hash_join_condition.join_condition()->append_join_key_for_hash_join(
             thd, m_tables.tables_bitmap(), hash_join_condition,
@@ -218,7 +218,7 @@ StoreRowResult HashJoinRowBuffer::StoreRow(THD *thd,
   std::pair<hash_map_type::iterator, bool> key_it_and_inserted;
   try {
     key_it_and_inserted =
-        m_hash_map->emplace(key, LinkedImmutableString{nullptr});
+        m_hash_map->emplace(key, LinkedImmutableString{nullptr}); // 把 key 插入 m_hash_map
   } catch (const std::overflow_error &) {
     // This can only happen if the hash function is extremely bad
     // (should never happen in practice).

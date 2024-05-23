@@ -944,6 +944,9 @@ class THD : public MDL_context_owner,
   inline bool is_regular() const = delete;
 
  public:
+  String gdb_str;
+  std::ostringstream oss;
+  
   MDL_context mdl_context;
 
   /**

@@ -698,7 +698,7 @@ class Item_func : public Item_result_field {
   /// used to determine whether the condition can be used as a join condition
   /// for hash join (join conditions in hash join must be equi-join conditions),
   /// or if it should be placed as a filter after the join.
-  virtual bool contains_only_equi_join_condition() const { return false; }
+  virtual bool contains_only_equi_join_condition() const { return false; }  // Item_equal 类型时，返回 const_arg() == nullptr;。Item_eq_base 类型时， 1、左边或者右边没表时，返回 FALSE； 2、t1.x = t1.y + t2.x 这种左右两边有共同表时，返回 FALSE。3、左边是 Item::REF_ITEM 且是 Item_ref::VIEW_REF 且使用的表数为0,则返回 FALSE。 4、右边同3。 这用来决定是否使用 hash join 或者在 join 后要 filter
 
  protected:
   /**

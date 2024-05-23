@@ -7603,7 +7603,7 @@ bool Item_cond_and::contains_only_equi_join_condition() const {
   return true;
 }
 
-bool Item_eq_base::contains_only_equi_join_condition() const {
+bool Item_eq_base::contains_only_equi_join_condition() const {  // 1、左边或者右边没表时，返回 FALSE； 2、t1.x = t1.y + t2.x 这种左右两边有共同表时，返回 FALSE。3、左边是 Item::REF_ITEM 且是 Item_ref::VIEW_REF 且使用的表数为0,则返回 FALSE。 4、右边同3
   assert(arg_count == 2);
   Item *left_arg = args[0];
   Item *right_arg = args[1];

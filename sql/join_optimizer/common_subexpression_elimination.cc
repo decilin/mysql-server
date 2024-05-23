@@ -174,7 +174,7 @@ Item *OrGroupWithSomeRemoved(Item_cond_or *or_item,
 
 }  // namespace
 
-Item *CommonSubexpressionElimination(Item *cond) {
+Item *CommonSubexpressionElimination(Item *cond) {  // 共同子表达式消除
   if (!IsOr(cond)) {
     // Not an OR expression, but we could have something within it.
     return cond;

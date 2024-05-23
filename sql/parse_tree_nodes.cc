@@ -190,6 +190,13 @@ bool PT_joined_table::contextualize_tabs(Parse_context *pc) {
       m_right_table_ref->join_order_swapped = true;
       m_right_table_ref->query_block->set_right_joins();
     }
+  } else if (m_type & JTT_FULL) {
+    m_right_table_ref->outer_join = true;
+    m_right_table_ref->full_join = true;
+    if (was_right_join) {
+      m_right_table_ref->join_order_swapped = true;
+      m_right_table_ref->query_block->set_right_joins();
+    }
   }
 
   return false;

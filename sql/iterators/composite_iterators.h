@@ -379,12 +379,17 @@ class NestedLoopIterator final : public RowIterator {
     NEEDS_OUTER_ROW,
     READING_FIRST_INNER_ROW,
     READING_INNER_ROWS,
-    END_OF_ROWS
+    END_OF_ROWS,
+
+    NEEDS_INNER_ROW,
+    READING_FIRST_OUTER_ROW,
+    READING_OUTER_ROWS,
+
   } m_state;
 
-  unique_ptr_destroy_only<RowIterator> const m_source_outer;
-  unique_ptr_destroy_only<RowIterator> const m_source_inner;
-  const JoinType m_join_type;
+  unique_ptr_destroy_only<RowIterator>  m_source_outer;
+  unique_ptr_destroy_only<RowIterator>  m_source_inner;
+  JoinType m_join_type;
 
   /** Whether to use batch mode when scanning the inner iterator. */
   const bool m_pfs_batch_mode;

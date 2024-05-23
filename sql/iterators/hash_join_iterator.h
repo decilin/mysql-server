@@ -447,7 +447,7 @@ class HashJoinIterator final : public RowIterator {
   /// the first matching row in the hash table may fail the extra condition(s).
   ///
   /// @retval true if we can reject duplicate keys in the hash table.
-  bool RejectDuplicateKeys() const {
+  bool RejectDuplicateKeys() const {  // 如果是 JoinType::SEMI 或者 JoinType::ANTI，则拒绝重复的 Key
     return m_extra_condition == nullptr &&
            (m_join_type == JoinType::SEMI || m_join_type == JoinType::ANTI);
   }
@@ -495,10 +495,10 @@ class HashJoinIterator final : public RowIterator {
   enum class State {
     // We are reading a row from the probe input, where the row comes from
     // the iterator.
-    READING_ROW_FROM_PROBE_ITERATOR,
+    READING_ROW_FROM_PROBE_ITERATOR,  // 从右边读
     // We are reading a row from the probe input, where the row comes from a
     // chunk file.
-    READING_ROW_FROM_PROBE_CHUNK_FILE,
+    READING_ROW_FROM_PROBE_CHUNK_FILE,  
     // We are reading a row from the probe input, where the row comes from a
     // probe row saving file.
     READING_ROW_FROM_PROBE_ROW_SAVING_FILE,
@@ -507,9 +507,9 @@ class HashJoinIterator final : public RowIterator {
     LOADING_NEXT_CHUNK_PAIR,
     // We are reading the first row returned from the hash table lookup that
     // also passes extra conditions.
-    READING_FIRST_ROW_FROM_HASH_TABLE,
+    READING_FIRST_ROW_FROM_HASH_TABLE,  // 从左边读第一行
     // We are reading the remaining rows returned from the hash table lookup.
-    READING_FROM_HASH_TABLE,
+    READING_FROM_HASH_TABLE,  // 从左边读
     // No more rows, both inputs are empty.
     END_OF_ROWS
   };
@@ -518,8 +518,8 @@ class HashJoinIterator final : public RowIterator {
   uint64_t *m_hash_table_generation;
   uint64_t m_last_hash_table_generation;
 
-  const unique_ptr_destroy_only<RowIterator> m_build_input;
-  const unique_ptr_destroy_only<RowIterator> m_probe_input;
+  unique_ptr_destroy_only<RowIterator> m_build_input;
+  unique_ptr_destroy_only<RowIterator> m_probe_input;
 
   // The last row that was read from the hash table, or nullptr if none.
   // All rows under the same key are linked together (see the documentation
@@ -533,12 +533,17 @@ class HashJoinIterator final : public RowIterator {
   // compute the join key when needed.
   pack_rows::TableCollection m_probe_input_tables;
   pack_rows::TableCollection m_build_input_tables;
+  pack_rows::TableCollection m_probe_input_tables2;
+  pack_rows::TableCollection m_build_input_tables2;
   const table_map m_tables_to_get_rowid_for;
 
   // An in-memory hash table that holds rows from the build input (directly from
   // the build input iterator, or from a chunk file). See the class comment for
   // details on how and when this is used.
   hash_join_buffer::HashJoinRowBuffer m_row_buffer;
+
+  hash_join_buffer::HashJoinRowBuffer m_row_buffer2;
+  bool full_to_anti = false;
 
   // A list of the join conditions (all of them are equi-join conditions).
   Prealloced_array<HashJoinCondition, 4> m_join_conditions;
@@ -615,7 +620,7 @@ class HashJoinIterator final : public RowIterator {
   bool m_build_iterator_has_more_rows{true};
 
   // What kind of join the iterator should execute.
-  const JoinType m_join_type;
+  JoinType m_join_type;
 
   // If not nullptr, an extra condition that the iterator will evaluate after a
   // lookup in the hash table is done, but before the row is returned. This is

@@ -263,8 +263,8 @@ TableScanIterator::~TableScanIterator() {
   }
 }
 
-bool TableScanIterator::Init() {
-  empty_record(table());
+bool TableScanIterator::Init() {  // 设置迭代器从第一行开始读取数据
+  empty_record(table()); //  memcpy((table)->record[0], (table)->s->default_values, (size_t)(table)->s->reclength) 和 memset(table->null_flags, 255, table->s->null_bytes);
 
   /*
     Only attempt to allocate a record buffer the first time the handler is

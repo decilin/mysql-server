@@ -78,7 +78,7 @@
 
 // You can change 0 to 1 here to get debug traces of the algorithm
 // as it is working.
-#define DEBUGGING_DPHYP 0
+#define DEBUGGING_DPHYP 1
 
 #if DEBUGGING_DPHYP
 #include <stdio.h>
@@ -106,6 +106,18 @@ inline std::string PrintSet(NodeMap x) {
     ret += buf;
   }
   return ret + "}";
+}
+
+inline void PrintDynamicTable(size_t lowest_node_idx, NodeMap subgraph, NodeMap forbidden, NodeMap Neighborhood, NodeMap Complement, const char* FunctionName) {
+  HYPERGRAPH_PRINTF("DynamicTable: |%25s|%20ld|%20s|%20s|%20s|%20s|\n",
+                    FunctionName, lowest_node_idx, PrintSet(subgraph).c_str(), PrintSet(forbidden).c_str(), PrintSet(Neighborhood).c_str(), PrintSet(Complement).c_str());
+}
+inline void PrintDynamicTableHeader() {
+  HYPERGRAPH_PRINTF("DynamicTable: |%-25s|%-20s|%-20s|%-20s|%-20s|%-20s|\n",
+                    "FunctionName", "lowest_node_idx", "subgraph", "forbidden", "Neighborhood", "Complement");
+}
+inline void PrintDynamicTableLine() {
+  HYPERGRAPH_PRINTF("DynamicTable: ------------------------------------------------------------------------------------------------------------------------------------\n");
 }
 
 /*
@@ -185,8 +197,13 @@ class NeighborhoodCache {
 
   // Tell the cache we just computed a neighborhood. It can choose to
   // store it to accelerate future InitSearch() calls.
-  inline void Store(NodeMap just_grown_by, NodeMap neighborhood,
+  inline void Store(int depth, NodeMap just_grown_by, NodeMap neighborhood,
                     NodeMap full_neighborhood) {
+    HYPERGRAPH_PRINTF(
+      "%sNeighborhoodCache->Store(just_grown_by:%s, neighborhood:%s, full_neighborhood:%s)     &cache:%p, cache.m_taboo_bit:%s\n",
+      std::string(depth * 4, ' ').c_str(), PrintSet(just_grown_by).c_str(), PrintSet(neighborhood).c_str(), PrintSet(full_neighborhood).c_str(), 
+      (void*)this, PrintSet(m_taboo_bit).c_str());
+
     assert(IsSubset(neighborhood, full_neighborhood));
     if (Overlaps(just_grown_by, m_taboo_bit)) return;
 
@@ -195,7 +212,7 @@ class NeighborhoodCache {
     m_last_neighborhood = neighborhood;
   }
 
- private:
+ public:
   const NodeMap m_taboo_bit;
   NodeMap m_last_just_grown_by =
       ~0;  // Don't try to use the cache the first iteration.
@@ -280,19 +297,32 @@ class NeighborhoodCache {
   depending on the shape of the graph (~40% average across the microbenchmarks).
   It is fairly big to inline, but it helps speed significantly, probably due
   to the large amount of parameters to be passed back and forth.
- */
-inline NodeMap FindNeighborhood(const Hypergraph &g, NodeMap subgraph,
+ */// 返回 subgraph 的直连邻居，不含间接邻居，也不包含本身的任何元素。这函数参数中的 just_grown_by ⊆ subgraph。
+inline NodeMap FindNeighborhood(int depth, const Hypergraph &g, NodeMap subgraph, 
                                 NodeMap forbidden, NodeMap just_grown_by,
                                 NeighborhoodCache *cache,
                                 NodeMap *full_neighborhood_arg) {
+  HYPERGRAPH_PRINTF(
+      "%sFindNeighborhood(subgraph:%s, forbidden:%s, just_grown_by:%s, full_neighborhood_arg:%s),     &cache:%p, cache.m_taboo_bit:%s\n",
+      std::string(depth * 4, ' ').c_str(), PrintSet(subgraph).c_str(), PrintSet(forbidden).c_str(), PrintSet(just_grown_by).c_str(), 
+      PrintSet(*full_neighborhood_arg).c_str(), (void*)cache, PrintSet(cache->m_taboo_bit).c_str());
+
   assert(IsSubset(just_grown_by, subgraph));
 
   NodeMap full_neighborhood =
       *full_neighborhood_arg;  // Keep us out of aliasing trouble.
   NodeMap neighborhood = 0;
 
+  HYPERGRAPH_PRINTF(
+      "%s FindNeighborhood     the last cache:{m_last_just_grown_by:%s, m_last_full_neighborhood:%s, m_last_neighborhood:%s, m_taboo_bit:%s},      &cache:%p\n",
+       std::string(depth * 4, ' ').c_str(), PrintSet(cache->m_last_just_grown_by).c_str(), 
+       PrintSet(cache->m_last_full_neighborhood).c_str(), PrintSet(cache->m_last_neighborhood).c_str(), PrintSet(cache->m_taboo_bit).c_str(), (void*)cache);
+
   NodeMap to_search =
       cache->InitSearch(just_grown_by, &neighborhood, &full_neighborhood);
+
+  HYPERGRAPH_PRINTF("%s FindNeighborhood     to_search:%s, cache.m_taboo_bit:%s,      &cache:%p\n",
+                  std::string(depth * 4, ' ').c_str(), PrintSet(to_search).c_str(), PrintSet(cache->m_taboo_bit).c_str(), (void*)cache);
   assert(IsSubset(neighborhood, full_neighborhood));
 
   for (size_t node_idx : BitsSetIn(to_search)) {
@@ -328,12 +358,12 @@ inline NodeMap FindNeighborhood(const Hypergraph &g, NodeMap subgraph,
   neighborhood &= ~(subgraph | forbidden);
   full_neighborhood |= neighborhood;
 
-  cache->Store(just_grown_by, neighborhood, full_neighborhood);
-
   HYPERGRAPH_PRINTF(
-      "Neighborhood of %s (calculated on %s) with forbidden %s = %s\n",
-      PrintSet(subgraph).c_str(), PrintSet(just_grown_by).c_str(),
-      PrintSet(forbidden).c_str(), PrintSet(neighborhood).c_str());
+      "%s FindNeighborhood     Neighborhood of %s (calculated on %s) with forbidden %s = %s,     &cache:%p, cache.m_taboo_bit:%s\n",
+      std::string(depth * 4, ' ').c_str(), PrintSet(subgraph).c_str(), PrintSet(just_grown_by).c_str(),
+      PrintSet(forbidden).c_str(), PrintSet(neighborhood).c_str(), (void*)cache, PrintSet(cache->m_taboo_bit).c_str());
+
+  cache->Store(depth + 1, just_grown_by, neighborhood, full_neighborhood);
 
   *full_neighborhood_arg = full_neighborhood;
   return neighborhood;
@@ -346,43 +376,61 @@ inline NodeMap FindNeighborhood(const Hypergraph &g, NodeMap subgraph,
 // the complement graph.
 //
 // Called EmitCsg() in the DPhyp paper.
+// 这个函数的总体流程：把 neighborhood 的每个节点当 complement 的种子，先计算 complement = seed 的初始值，然后调用 ExpandComplement 从 seed 开始扩展 complement
+// subgraph 是连通的才会调用这个函数
+// 返回 false 表示可以继续，返回 true 表示需要终止
 template <class Receiver>
 [[nodiscard]] bool EnumerateComplementsTo(
-    const Hypergraph &g, size_t lowest_node_idx, NodeMap subgraph,
+    int depth, const Hypergraph &g, size_t lowest_node_idx, NodeMap subgraph,
     NodeMap full_neighborhood, NodeMap neighborhood, Receiver *receiver) {
+  HYPERGRAPH_PRINTF("%sEnumerateComplementsTo(lowest_node_idx:%ld, subgraph:%s, full_neighborhood:%s, neighborhood:%s)\n",
+                    std::string(depth * 4, ' ').c_str(), lowest_node_idx, PrintSet(subgraph).c_str(), PrintSet(full_neighborhood).c_str(), PrintSet(neighborhood).c_str());
+
+  PrintDynamicTable(lowest_node_idx, /*subgraph*/subgraph, /*forbidden*/0, /*Neighborhood*/neighborhood, /*Complement*/0, /*FunctionName*/"EnumerateComplementsTo");
+
   NodeMap forbidden = TablesBetween(0, lowest_node_idx);
 
-  HYPERGRAPH_PRINTF("Enumerating complements to %s, neighborhood=%s\n",
-                    PrintSet(subgraph).c_str(), PrintSet(neighborhood).c_str());
-
-  neighborhood &= ~subgraph;
+  neighborhood &= ~subgraph;  // 这个处理会不会多余，neighborhood 跟 subgraph 怎么会有交集？在 ExpandSubgraph 中会把 forbidden 添加到 subgraph 中，但这个影响是什么？
 
   // Similar to EnumerateAllConnectedPartitions(), we start at seed nodes
   // counting _backwards_, so that we consider larger and larger potential
   // graphs. This is critical for the property that we want to enumerate smaller
   // subsets before larger ones.
-  NeighborhoodCache cache(neighborhood);
-  for (size_t seed_idx : BitsSetInDescending(neighborhood)) {
+  NeighborhoodCache* cache = new NeighborhoodCache(neighborhood);
+
+  HYPERGRAPH_PRINTF("%s EnumerateComplementsTo     init cache(neighborhood:%s), cache.m_taboo_bit:%s,     &cache:%p\n",
+                  std::string(depth * 4, ' ').c_str(), PrintSet(neighborhood).c_str(), PrintSet(cache->m_taboo_bit).c_str(), (void*)cache);
+
+  for (size_t seed_idx : BitsSetInDescending(neighborhood)) { // 后序遍历 neighborhood 的所有 bits。为什么是遍历直接邻居，而不是 （subgraph ∪ forbidden）在 g 中的补集。此时 forbidden ∩ subgraph = ∅
     // First consider a complement consisting solely of the seed node;
     // see if we can find an edge (or multiple ones) connecting it
     // to the given subgraph.
     NodeMap seed = TableBitmap(seed_idx);
-    if (Overlaps(g.nodes[seed_idx].simple_neighborhood, subgraph)) {
-      for (size_t edge_idx : g.nodes[seed_idx].simple_edges) {
+    // Complement 为单点时，可以用下面的办法搜索连接谓词。如果 Complement 非单点，则需要用到 TryConnecting 函数来搜索
+    if (Overlaps(g.nodes[seed_idx].simple_neighborhood, subgraph)) {  // 如果该种子节点跟 subgraph 之间有简单边
+      for (size_t edge_idx : g.nodes[seed_idx].simple_edges) {  // 遍历该种子节点的所有简单边
         const Hyperedge e = g.edges[edge_idx];
         assert(e.left == seed);
-        if (Overlaps(e.right, subgraph)) {
+        if (Overlaps(e.right, subgraph)) {  // 如果简单边的右边跟 subgraph 相连
+          // 如果 FoundSubgraphPair 返回 false 则表示可以找到 subgraph 跟 seed node 之间的连接谓词。 这里相当动态规划中的保存子集的计算结果。
+          // 这里 edge_idx / 2 的原因，是因为每个连接谓词都会生成对两条边(比如R1.id=R2.id会生成{R1,R2}和{R2,R1})，所以除以 2 后可以找到对应的连接谓词
           if (receiver->FoundSubgraphPair(subgraph, seed, edge_idx / 2)) {
             return true;
-          }
+          } else {            
+            HYPERGRAPH_PRINTF("Complete EnumerateComplementsTo csg-cmp-pair: {%s}-{%s}\n",
+                        PrintSet(subgraph).c_str(), PrintSet(seed).c_str());
+          }        
         }
       }
     }
-    for (size_t edge_idx : g.nodes[seed_idx].complex_edges) {
+    for (size_t edge_idx : g.nodes[seed_idx].complex_edges) { // 遍历该种子的超边
       const Hyperedge e = g.edges[edge_idx];
-      if (e.left == seed && IsSubset(e.right, subgraph)) {
-        if (receiver->FoundSubgraphPair(subgraph, seed, edge_idx / 2)) {
+      if (e.left == seed && IsSubset(e.right, subgraph)) {  // 如果 seed node 的超点 跟 subgraph 相连
+        if (receiver->FoundSubgraphPair(subgraph, seed, edge_idx / 2)) {  // 保存动态规划中的子集的计算结果
           return true;
+        } else {            
+            HYPERGRAPH_PRINTF("Complete EnumerateComplementsTo csg-cmp-pair: {%s}-{%s}\n",
+                        PrintSet(subgraph).c_str(), PrintSet(seed).c_str());
         }
       }
     }
@@ -401,13 +449,17 @@ template <class Receiver>
     // EnumerateAllConnectedPartitions(), and the whole reason for iterating
     // backwards, but the DPhyp paper misses this. The “Building Query
     // Compilers” document, however, seems to have corrected it.
+    // 在《Building Query Compilers》 这本书的第78页有处理 new_forbidden 的伪代码
     NodeMap new_forbidden =
+        // 为了防止遍历重复的 complement，需要把 neighborhood 集合中的 seed_idx 之前的子集合屏蔽，也就是把 neighborhood 的前半部分添加进 new_forbidden        
         forbidden | subgraph | (neighborhood & TablesBetween(0, seed_idx));
     NodeMap new_full_neighborhood = 0;  // Unused; see comment on TryConnecting.
-    NodeMap new_neighborhood = FindNeighborhood(g, seed, new_forbidden, seed,
-                                                &cache, &new_full_neighborhood);
-    if (ExpandComplement(g, lowest_node_idx, subgraph, full_neighborhood, seed,
-                         new_neighborhood, new_forbidden, receiver)) {
+    // 计算 seed 的直接邻居。
+    NodeMap new_neighborhood = FindNeighborhood(depth + 1, g, /*subgraph*/seed, /*forbidden*/new_forbidden, /*just_grown_by*/seed,
+                                                cache, /**full_neighborhood_arg*/&new_full_neighborhood);
+    // 每次进入 ExpandComplement函数 之前，都会把需要用到的参数先计算好，再调用该ExpandComplement函数。 了解这个对我们分析打印日志信息很有帮助。
+    if (ExpandComplement(depth + 1, g, /*lowest_node_idx*/lowest_node_idx, /*subgraph*/subgraph, /*subgraph_full_neighborhood*/full_neighborhood, /*complement*/seed,
+                         /*neighborhood*/new_neighborhood, /*forbidden*/new_forbidden, receiver)) {
       return true;
     }
   }
@@ -420,37 +472,51 @@ template <class Receiver>
 // use it as base for enumerating a complement graph before growing it.
 //
 // Called EnumerateCsgRec() in the paper.
+// 沿着 neighborhood 扩展 subgraph，如果新的 grown_subgraph 连通，则调用 EnumerateComplementsTo。然后继续扩展 subgraph
+// 总共有两个地方调用 ExpandSubgraph，一个是 EnumerateAllConnectedPartitions， 另外一个是 ExpandSubgraph 递归。
+// EnumerateAllConnectedPartitions 调用 ExpandSubgraph 时，subgraph ⊆ forbidden。
+// ExpandSubgraph 递归时，subgraph ∩ forbidden = ∅。 
+// 返回 false 表示可以继续，返回 true 表示需要终止
 template <class Receiver>
-[[nodiscard]] bool ExpandSubgraph(const Hypergraph &g, size_t lowest_node_idx,
+[[nodiscard]] bool ExpandSubgraph(int depth, const Hypergraph &g, size_t lowest_node_idx,
                                   NodeMap subgraph, NodeMap full_neighborhood,
                                   NodeMap neighborhood, NodeMap forbidden,
                                   Receiver *receiver) {
   HYPERGRAPH_PRINTF(
-      "Expanding connected subgraph, subgraph=%s neighborhood=%s "
-      "forbidden=%s\n",
-      PrintSet(subgraph).c_str(), PrintSet(neighborhood).c_str(),
+      "%sExpandSubgraph(lowest_node_idx:%ld, subgraph:%s, full_neighborhood:%s, neighborhood:%s, forbidden:%s)\n",
+      std::string(depth * 4, ' ').c_str(), lowest_node_idx, PrintSet(subgraph).c_str(), PrintSet(full_neighborhood).c_str(), PrintSet(neighborhood).c_str(),
       PrintSet(forbidden).c_str());
+
+  PrintDynamicTable(lowest_node_idx, /*subgraph*/subgraph, /*forbidden*/forbidden, /*Neighborhood*/neighborhood, /*Complement*/0, /*FunctionName*/"ExpandSubgraph");
 
   // Given a neighborhood, try growing our subgraph by all possible
   // combinations of included/excluded (except the one where all are
   // excluded).
-  NeighborhoodCache cache(neighborhood);
+  NeighborhoodCache* cache = new NeighborhoodCache(neighborhood);
+  HYPERGRAPH_PRINTF("%s ExpandSubgraph     init cache(neighborhood:%s), cache.m_taboo_bit:%s,     &cache:%p\n",
+                  std::string(depth * 4, ' ').c_str(), PrintSet(neighborhood).c_str(), PrintSet(cache->m_taboo_bit).c_str(), (void*)cache);
+  // 枚举 neighborhood 的所有非空子集，包含 neighborhood 本身
   for (NodeMap grow_by : NonzeroSubsetsOf(neighborhood)) {
     HYPERGRAPH_PRINTF(
-        "Trying to grow-and-complement %s by %s (out of %s) [connected=%d]\n",
-        PrintSet(subgraph).c_str(), PrintSet(grow_by).c_str(),
+        "%s ExpandSubgraph     ->EnumerateComplementsTo     grown_subgraph={%s+%s}, grow_by:%s is subset of neighborhood:%s, [connected=%d]\n",
+        std::string(depth * 4, ' ').c_str(), PrintSet(subgraph).c_str(), PrintSet(grow_by).c_str(),  PrintSet(grow_by).c_str(),
         PrintSet(neighborhood).c_str(), receiver->HasSeen(subgraph | grow_by));
 
     // See if the new subgraph is connected. The candidate subgraphs that are
     // connected will previously have been seen as csg-cmp-pairs, and thus, we
     // can ask the receiver!
     NodeMap grown_subgraph = subgraph | grow_by;
+    // 为什么沿着 subgraph 的 neighborhood 扩展，还要判断 grown_subgraph 是否连通
+    // 我来分析两种情况
+    // 1、如果 subgraph 跟 grow_by 之间存在简单边，那么 grown_subgraph 肯定连通，则下面的判断显得多余
+    // 2、如果 subgraph 跟 grow_by 之间是超边连接，是需要判断的。原因是：假设 {R2,R3}-{R4,R5} 是个超边（可以推出在数据结构表示中 R4 属于 {R2,R3} 的邻居），
+    //    我们现在开始处理 grown_subgraph = {R2,R3,R4}，这个时候 grown_subgraph 未必连通,所以我们需要从 receiver 中查看它是否连通
     if (receiver->HasSeen(grown_subgraph)) {
       // Find the neighborhood of the new subgraph.
       NodeMap new_full_neighborhood = full_neighborhood;
       NodeMap new_neighborhood =
-          FindNeighborhood(g, subgraph | grow_by, forbidden, grow_by, &cache,
-                           &new_full_neighborhood);
+          FindNeighborhood(depth + 1, g, /*subgraph*/subgraph | grow_by, /*forbidden*/forbidden, /*just_grow_by*/grow_by, cache,
+                           /**full_neighborhood_arg*/&new_full_neighborhood);
 
       // EnumerateComplementsTo() resets the forbidden set, since nodes that
       // were forbidden under this subgraph may very well be part of the
@@ -463,20 +529,35 @@ template <class Receiver>
       // to the neighborhood for purposes of computing the complement.
       //
       // This behavior is tested in the SmallStar unit test.
+
+      // 因为 EnumerateComplementsTo 中会重置 forbidden，这样会导致 (subgraph 中的 forbidden) 会成为 (complement 的一部分)
+      // 所以我们会把 forbidden 添加到 new_neighborhood ，然后才交给 EnumerateComplementsTo 处理 new_neighborhood
+      // 那怎么证明这种做法不影响 EnumerateComplementsTo 正确性？现在我们只能保证在 EnumerateComplementsTo 中的 forbidden 的正确性，
+      // 还不能保证 EnumerateComplementsTo 中的 complement 的正确性(因为在 EnumerateComplementsTo 中，complement 需要遍历现在的 new_neighborhood 获取，明显影响到了 complement)。
+      // 重新阅读 EnumerateComplementsTo，会发现它的 neighborhood 只参与了 seed 的遍历、和 new_forbidden 的赋值，这两种情况都不会影响代码的正确性、完备性。
+
+      // 对应的测试用例 unittest/gunit/dphyp-t.cc 中的 TEST(DPhypTest, SmallStar)。测试命令（路径需要根据环境进行调整）：
+      // cmake --build /data/mysql-server-8.2.0/build --config Debug --target dphyp-t -j 6
+      // /data/mysql-server-8.2.0/build/runtime_output_directory/dphyp-t --gtest_filter=DPhypTest.SmallStar
+
+      // 上面分析的过程中，可能会有人好奇 forbidden 除了 TablesBetween(0, lowest_node_idx)，还有哪些场景其它 node 也会被加入 forbidden。
+      // 整个算法只有两个地方调用 ExpandSubgraph：
+      // 一个是 EnumerateAllConnectedPartitions 中，它的 forbidden 包含 subgraph，也就是 subgraph ⊆ forbidden。 
+      // 另外一个是 ExpandSubgraph 本身的递归中，它会把 subgraph 从 forbidden 中剔除，也就是 subgraph ∩ forbidden = ∅
       new_neighborhood |= forbidden & ~TablesBetween(0, lowest_node_idx);
 
       // This node's neighborhood is also part of the new neighborhood
       // it's just not added to the forbidden set yet, so we missed it in
       // the previous calculation).
       new_neighborhood |= neighborhood;
-
-      if (EnumerateComplementsTo(g, lowest_node_idx, grown_subgraph,
-                                 new_full_neighborhood, new_neighborhood,
+      if (EnumerateComplementsTo(depth + 1, g, /*lowest_node_idx*/lowest_node_idx, /*subgraph*/grown_subgraph,
+                                 /*full_neighborhood*/new_full_neighborhood, /*neighborhood*/new_neighborhood,
                                  receiver)) {
         return true;
       }
     }
   }
+  
 
   // Now try to grow all the grown subgraphs into larger, connected subgraphs.
   // Note that we do this even if the grown subgraph isn't connected, since it
@@ -485,26 +566,33 @@ template <class Receiver>
   // We need to do this after EnumerateComplementsTo() has run on all of them
   // (in turn, generating csg-cmp-pairs and calling FoundSubgraphPair()),
   // to guarantee that we will see any smaller subgraphs before larger ones.
+  // 如果 grow_by 都是 简单边的点集合，那么 grown_subgraph 肯定是连通的, 否则 grown_subgraph 未必连通
+  // 不管连不连通，我们都需要继续扩展 subgraph，因为扩展后可能会连通
   for (NodeMap grow_by : NonzeroSubsetsOf(neighborhood)) {
-    HYPERGRAPH_PRINTF("Trying to grow-and-keep-growing %s by %s (out of %s)\n",
-                      PrintSet(subgraph).c_str(), PrintSet(grow_by).c_str(),
-                      PrintSet(neighborhood).c_str());
+                      
+    HYPERGRAPH_PRINTF(
+        "%s ExpandSubgraph     ->ExpandSubgraph     grown_subgraph={%s+%s}, grow_by:%s is subset of neighborhood:%s, [connected=%d]\n",
+        std::string(depth * 4, ' ').c_str(), PrintSet(subgraph).c_str(), PrintSet(grow_by).c_str(),  PrintSet(grow_by).c_str(),
+        PrintSet(neighborhood).c_str(), receiver->HasSeen(subgraph | grow_by));
+
     NodeMap grown_subgraph = subgraph | grow_by;
 
     // Recursive calls are not allowed to add any of the nodes from
     // our current neighborhood, since we're already trying all
     // combinations of those ourselves.
+    // 我们目标是快速搜索所有的 csg-cmp-pairs，因为在当前的循环体会组合 neighborhood 所有子集到 csg，所以进入下一轮的递归之前需要把 neighborhood 添加到 new_forbidden。
+    // 这里的 & ~grown_subgraph 等价把 grown_subgraph 剔除。为什么要剔除呢？
+
     NodeMap new_forbidden = (forbidden | neighborhood) & ~grown_subgraph;
     assert(!IsSubset(grown_subgraph, new_forbidden));
 
     // Find the neighborhood of the new subgraph.
     NodeMap new_full_neighborhood = full_neighborhood;
-    NodeMap new_neighborhood =
-        FindNeighborhood(g, subgraph | grow_by, new_forbidden, grow_by, &cache,
-                         &new_full_neighborhood);
-
-    if (ExpandSubgraph(g, lowest_node_idx, grown_subgraph,
-                       new_full_neighborhood, new_neighborhood, new_forbidden,
+    NodeMap new_neighborhood =  // 剔除上面的 grown_subgraph 不会影响这里的 new_neighborhood
+        FindNeighborhood(depth + 1, g, /*subgraph*/subgraph | grow_by, /*forbidden*/new_forbidden, /*just_grow_by*/grow_by, cache,
+                         /**full_neighborhood_arg*/&new_full_neighborhood);
+    if (ExpandSubgraph(depth + 1, g, /*lowest_node_idx*/lowest_node_idx, /*subgraph*/grown_subgraph,
+                       /*full_neighborhood*/new_full_neighborhood, /*neighborhood*/new_neighborhood, /*forbidden*/new_forbidden,
                        receiver)) {
       return true;
     }
@@ -528,12 +616,19 @@ template <class Receiver>
 // complement, and picked the one with fewest nodes to study, but it doesn't
 // seem to be worth it.
 template <class Receiver>
-[[nodiscard]] bool TryConnecting(const Hypergraph &g, NodeMap subgraph,
+// 返回 false 表示可以继续，返回 true 表示需要终止
+// 扩展 complement 时，则判断新的 complement 跟 subgraph 是否连通，如果新增的集合是单点，逻辑在 EnumerateComplementsTo 中，如果新增的集合是多个点，则判断逻辑在在这里
+[[nodiscard]] bool TryConnecting(int depth, const Hypergraph &g, NodeMap subgraph,
                                  NodeMap subgraph_full_neighborhood,
                                  NodeMap complement, Receiver *receiver) {
-  for (size_t node_idx : BitsSetIn(complement & subgraph_full_neighborhood)) {
+  HYPERGRAPH_PRINTF(
+      "%sTryConnecting(subgraph:%s, subgraph_full_neighborhood:%s, complement:%s)\n",
+      std::string(depth * 4, ' ').c_str(), PrintSet(subgraph).c_str(), PrintSet(subgraph_full_neighborhood).c_str(), PrintSet(complement).c_str());
+
+  for (size_t node_idx : BitsSetIn(complement & subgraph_full_neighborhood)) {  // 利用 subgraph_full_neighborhood 可以提升搜索效率
+    // complement 连通，并不代表找到 csg-cmp-pairs,还是需要先从超图上判断是否连通，然后再到receiver中确认是否满足冲突规则规则
     // Simple edges.
-    if (Overlaps(g.nodes[node_idx].simple_neighborhood, subgraph)) {
+    if (Overlaps(g.nodes[node_idx].simple_neighborhood, subgraph)) {  // 判断是否有简单边连接，逻辑跟 EnumerateComplementsTo 的简单边判断完全一样
       for (size_t edge_idx : g.nodes[node_idx].simple_edges) {
         // The tests are really IsSubset(), but Overlaps() is equivalent
         // here, and slightly faster.
@@ -548,7 +643,7 @@ template <class Receiver>
 
     // Complex edges.
     NodeMap node = TableBitmap(node_idx);
-    for (size_t edge_idx : g.nodes[node_idx].complex_edges) {
+    for (size_t edge_idx : g.nodes[node_idx].complex_edges) {   // 判断是否有超边连接，逻辑跟 EnumerateComplementsTo 的超边判断基本一样，不一样的地方是需要判断 IsolateLowestBit(e.left) == node
       const Hyperedge e = g.edges[edge_idx];
 
       // NOTE: We call IsolateLowestBit() so that we only see the edge once.
@@ -576,19 +671,24 @@ template <class Receiver>
 // ExpandSubgraph() and ExpandComplement().)
 //
 // Called EnumerateCmpRec() in the paper.
+// 沿着 neighborhood 扩展 complement，如果不连通，一直扩展下去，肯定会连通，因为如果是超点，那么扩展的方向不会错
+// 参数中的 complement 会包含上次递归的值，所以可以用来判断 csg-cmp-pair
+// 返回 false 表示可以继续，返回 true 表示需要终止
 template <class Receiver>
-[[nodiscard]] bool ExpandComplement(const Hypergraph &g, size_t lowest_node_idx,
+[[nodiscard]] bool ExpandComplement(int depth, const Hypergraph &g, size_t lowest_node_idx,
                                     NodeMap subgraph,
                                     NodeMap subgraph_full_neighborhood,
                                     NodeMap complement, NodeMap neighborhood,
                                     NodeMap forbidden, Receiver *receiver) {
+  HYPERGRAPH_PRINTF(
+      "%s ExpandComplement(lowest_node_idx:%ld, subgraph:%s, subgraph_full_neighborhood:%s, complement:%s, neighborhood:%s, forbidden:%s)\n",
+      std::string(depth * 4, ' ').c_str(), lowest_node_idx, PrintSet(subgraph).c_str(), PrintSet(subgraph_full_neighborhood).c_str(),
+      PrintSet(complement).c_str(), PrintSet(neighborhood).c_str(), PrintSet(forbidden).c_str());
+
+  PrintDynamicTable(lowest_node_idx, /*subgraph*/subgraph, /*forbidden*/forbidden, /*Neighborhood*/neighborhood, /*Complement*/complement, /*FunctionName*/"ExpandComplement");
+
   assert(IsSubset(subgraph, forbidden));
   assert(!IsSubset(complement, forbidden));
-
-  HYPERGRAPH_PRINTF(
-      "Trying to expand complement %s (subgraph is %s, forbidden is %s)\n",
-      PrintSet(complement).c_str(), PrintSet(subgraph).c_str(),
-      PrintSet(forbidden).c_str());
 
   // Given a neighborhood, try growing our subgraph by all possible
   // combinations of included/excluded (except the one where all are
@@ -599,12 +699,18 @@ template <class Receiver>
   // subgraphs), we don't need to recurse to find a third subgraph;
   // we can just check whether they are connected, and if so, tell
   // the receiver.
+  // 按{v1}，{v2}，{v1，v2}，{v3}，{v1，3}，{v2，v3}，{v1，v2，v3} …… 从小到大的顺序枚举 neighborhood 的所有非空子集，包含 neighborhood 本身
   for (NodeMap grow_by : NonzeroSubsetsOf(neighborhood)) {
     NodeMap grown_complement = complement | grow_by;
-    if (receiver->HasSeen(grown_complement)) {
-      if (TryConnecting(g, subgraph, subgraph_full_neighborhood,
+    // 如果之前处理过 grown_complement，则保存中间的计算结果
+    // 比如之前处理过 {R2,R3}-{R4,R5,R6},现在开始处理{R2,R3,R4}-{R5,R6}，这个时候要计算哪个路径更优并保存
+    if (receiver->HasSeen(grown_complement)) {//判断grown_complement是否连通，只需要到receiver中去判断，不需要像在 EnumerateComplementsTo 中通过超图的计算来判断，因为更大的lowest_node_idx中肯定会计算过
+      if (TryConnecting(depth + 1, g, subgraph, subgraph_full_neighborhood, // 尝试连接 subgraph 和 grown_complement
                         grown_complement, receiver)) {
         return true;
+      } else {
+        HYPERGRAPH_PRINTF("Complete  ExpandComplement csg-cmp-pair: {%s}-{%s}\n",
+                  PrintSet(subgraph).c_str(), PrintSet(grown_complement).c_str());
       }
     }
   }
@@ -617,31 +723,38 @@ template <class Receiver>
   //
   // We need to do this after FoundSubgraphPair() has run on all of them,
   // to guarantee that we will see any smaller subgraphs before larger ones.
-  NeighborhoodCache cache(neighborhood);
+  NeighborhoodCache* cache = new NeighborhoodCache(neighborhood);
+  HYPERGRAPH_PRINTF("%s ExpandComplement     init cache(neighborhood:%s), cache.m_taboo_bit:%s,     &cache:%p\n",
+                  std::string(depth * 4, ' ').c_str(), PrintSet(neighborhood).c_str(), PrintSet(cache->m_taboo_bit).c_str(), (void*)cache);
+
   for (NodeMap grow_by : NonzeroSubsetsOf(neighborhood)) {
-    HYPERGRAPH_PRINTF("Trying to grow complement %s by %s (out of %s)\n",
-                      PrintSet(complement).c_str(), PrintSet(grow_by).c_str(),
-                      PrintSet(neighborhood).c_str());
+    HYPERGRAPH_PRINTF(
+        "%s ExpandComplement     ->sExpandComplement     grown_complement={%s+%s}, grow_by:%s is subset of neighborhood:%s\n",
+        std::string(depth * 4, ' ').c_str(), PrintSet(complement).c_str(), PrintSet(grow_by).c_str(),  PrintSet(grow_by).c_str(),
+        PrintSet(neighborhood).c_str());
+
     NodeMap grown_complement = complement | grow_by;
 
     // Recursive calls are not allowed to add any of the nodes from
     // our current neighborhood, since we're already trying all
     // combinations of those ourselves.
+    // 比如现在的 complement={R5} neighborhood = {R3 R6 R8 R9} 在循环体体，第I次循环 grow_by = {R3 R6 R8} 第j次循环 grow_by = {R6 R8 R9}，
+    // 那么以后不管第I次循环 和 第j次循环 迭代多少次， 扩展的出来的 complement 都不一样，因为 i 有 R3, j 永远不会有 R3(因为j禁止了R3)。但每个循环体中覆盖所有，所以满足完备、正确
     NodeMap new_forbidden = (forbidden | neighborhood) & ~grown_complement;
     assert(!IsSubset(grown_complement, new_forbidden));
 
     // Find the neighborhood of the new complement.
     NodeMap new_full_neighborhood = 0;  // Unused; see comment on TryConnecting.
     NodeMap new_neighborhood =
-        FindNeighborhood(g, complement | grow_by, new_forbidden, grow_by,
-                         &cache, &new_full_neighborhood);
-
-    if (ExpandComplement(g, lowest_node_idx, subgraph,
-                         subgraph_full_neighborhood, grown_complement,
-                         new_neighborhood, new_forbidden, receiver)) {
+        FindNeighborhood(depth + 1, g, /*subgraph*/complement | grow_by, /*forbidden*/new_forbidden, /*just_grown_by*/grow_by,
+                         cache, /**full_neighborhood_arg*/&new_full_neighborhood);
+    if (ExpandComplement(depth + 1, g, /*lowest_node_idx*/lowest_node_idx, /*subgraph*/subgraph,
+                         /*subgraph_full_neighborhood*/subgraph_full_neighborhood, /*complement*/grown_complement,
+                         /*neighborhood*/new_neighborhood, /*forbidden*/new_forbidden, receiver)) {
       return true;
     }
   }
+  
   return false;
 }
 
@@ -658,34 +771,47 @@ template <class Receiver>
 //      If we find one such pair (a csg-cmp-pair), that's what the
 //      algorithm fundamentally is looking for.
 //
-// Called Solve() in the DPhyp paper.
+// Called Solve() in the DPhyp paper.(void*)&cache
 //
 // If at any point receiver->FoundSingleNode() or receiver->FoundSubgraphPair()
 // returns true, the algorithm will abort, and this function also return true.
 template <class Receiver>
 bool EnumerateAllConnectedPartitions(const Hypergraph &g, Receiver *receiver) {
+  PrintDynamicTableHeader();
+  PrintDynamicTableLine();
   for (int seed_idx = g.nodes.size() - 1; seed_idx >= 0; --seed_idx) {
     if (receiver->FoundSingleNode(seed_idx)) {
       return true;
     }
 
     NodeMap seed = TableBitmap(seed_idx);
-    HYPERGRAPH_PRINTF("\n\nStarting main iteration at node %s\n",
+    HYPERGRAPH_PRINTF("\n\n EnumerateAllConnectedPartitions     Starting main iteration at node %s\n",
                       PrintSet(seed).c_str());
+
+    // HYPERGRAPH_PRINTF("Starting main iteration at node %s\n",
+    //                   PrintSet(seed).c_str());
+
     NodeMap forbidden = TablesBetween(0, seed_idx);
     NodeMap full_neighborhood = 0;
-    NeighborhoodCache cache(0);
+    NeighborhoodCache* cache = new NeighborhoodCache(0);
+    HYPERGRAPH_PRINTF("%s EnumerateAllConnectedPartitions     init cache(neighborhood:%s), cache.m_taboo_bit:%s,     &cache:%p\n",
+                  std::string(0, ' ').c_str(), PrintSet(0).c_str(), PrintSet(cache->m_taboo_bit).c_str(), (void*)cache);
+
     NodeMap neighborhood =
-        FindNeighborhood(g, seed, forbidden, seed, &cache, &full_neighborhood);
-    if (EnumerateComplementsTo(g, seed_idx, seed, full_neighborhood,
-                               neighborhood, receiver)) {
+        FindNeighborhood(1, g, /*subgraph*/seed, /*forbidden*/forbidden, /*just_grown_by*/seed, cache, /**full_neighborhood_arg*/&full_neighborhood);  // 第一次计算 neighborhood，由于之前没缓存，所以这行里的 just_grown_by = subgraph
+    // 分析之前需要了解：
+    // 后续遇到的函数FoundSubgraphPair 返回 false 则表示可以找到 subgraph 跟 seed node 之间的连接谓词
+    if (EnumerateComplementsTo(1, g, /*lowest_node_idx*/seed_idx, /*subgraph*/seed, /*full_neighborhood*/full_neighborhood,
+                               /*neighborhood*/neighborhood, receiver)) {
       return true;
     }
-    if (ExpandSubgraph(g, seed_idx, seed, full_neighborhood, neighborhood,
-                       forbidden | seed, receiver)) {
+    if (ExpandSubgraph(1, g, /*lowest_node_idx*/seed_idx, /*subgraph*/seed, /*full_neighborhood*/full_neighborhood, /*neighborhood*/neighborhood, // 进入 ExpandSubgraph 内部之前，先计算好  forbidden
+                       /*forbidden*/forbidden | seed, receiver)) {
       return true;
     }
   }
+  PrintDynamicTableLine();
+  //printf("%s", PrintDottyHypergraph(receiver->m_graph).c_str());
   return false;
 }
 

@@ -654,7 +654,7 @@ static Item *AddCachesAroundConstantConditions(Item *item) {
       present its own challenges.
     - Join conditions.
  */
-bool FinalizePlanForQueryBlock(THD *thd, Query_block *query_block) {
+bool FinalizePlanForQueryBlock(THD *thd, Query_block *query_block) {  // 在我们选择了最终的计划（即，没有更多的备选方案）后，对访问路径树进行最后的修整。目前这里有两个主要的任务：考虑物化（因为我们不能在有整个计划之前做这个），和设置文件排序（因为它涉及到构造新的对象，所以我们不想为未使用的候选项做这个）。前者也影响了后者。
   assert(query_block->join->needs_finalize);
   query_block->join->needs_finalize = false;
 

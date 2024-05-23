@@ -1208,7 +1208,7 @@ static AccessPath *get_best_disjunct_quick(
   return ror_union_path;
 }
 
-bool comparable_in_index(Item *cond_func, const Field *field,
+bool comparable_in_index(Item *cond_func, const Field *field, // 在应用索引时，检查 field 和 value 的字段类型是否一致，涉及因素：比较类型、数据类型、字符集类型
                          const Field::imagetype itype,
                          Item_func::Functype comp_type, const Item *value) {
   /*

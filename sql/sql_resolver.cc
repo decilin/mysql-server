@@ -126,6 +126,16 @@ static Item *create_rollup_switcher(THD *thd, Query_block *query_block,
                                     Item_sum *item, int send_group_parts);
 static bool fulltext_uses_rollup_column(const Query_block *query_block);
 
+
+/*
+  Query_block 做 Prepare。
+  1、收集 SQL 中的 表、字段 的信息。
+  2、收集 SQL 中的 表达式。比如 where 语句、JOIN 语句、GROUP BY 语句、HAVING 语句、ORDER BY 语句、LIMIT 语句、递归 Prepare 该 Query_block 中的子查询
+  3、对 AST 做等价转换。比如 semi-join 转换、派生表转换、消除常量值和冗余语句（比如  ORDER BY, GROUP BY）
+
+  当调用此函数时，假定已经调用了 precheck() 函数。
+  precheck() 确保用户对查询涉及的表具有一些 SELECT 权限。
+*/
 /**
   Prepare query block for optimization.
 
@@ -189,8 +199,16 @@ bool Query_block::prepare(THD *thd, mem_root_deque<Item *> *insert_field_list) {
 
   Query_expression *const unit = master_query_expression();
 
-  if (!m_table_nest.empty()) propagate_nullability(&m_table_nest, false);
+  if (!m_table_nest.empty()) propagate_nullability(&m_table_nest, false); // outer join 算子中，设置 inner tables 为 nullability
 
+  /*
+    根据查询块的位置确定是否建议合并直接派生的表：
+      - 属于最外层 Query_block 的DTs：始终合并。判断是否最外层的方法是： master->master == nullptr
+        例子 SELECT * FROM (SELECT * FROM table1) AS derived_table;  这里的 derived_table 允许被合并
+      - 属于第一级子查询的DTs：则合并，
+        例子 SELECT * FROM table1 WHERE id IN (SELECT id FROM (SELECT * FROM table2) AS derived_table);  这里子查询的 derived_table 允许被合并
+      - 所有其他情况继承父 Query_block 的状态，要求 SQL 类型是 SELECT 或者 SET
+  */
   /*
     Determine whether it is suggested to merge immediate derived tables, based
     on the placement of the query block:
@@ -256,11 +274,11 @@ bool Query_block::prepare(THD *thd, mem_root_deque<Item *> *insert_field_list) {
 
   // Precompute and store the row types of NATURAL/USING joins.
   if (leaf_table_count >= 2 &&
-      setup_natural_join_row_types(thd, m_current_table_nest, &context))
+      setup_natural_join_row_types(thd, m_current_table_nest, &context))  // 补充 natural join 的字段
     return true;
 
   Mem_root_array<Item_exists_subselect *> sj_candidates_local(thd->mem_root);
-  set_sj_candidates(&sj_candidates_local);
+  set_sj_candidates(&sj_candidates_local);  // sj_candidates 初始化为空
 
   /*
     Item and Item_field CTORs will both increment some counters
@@ -273,10 +291,10 @@ bool Query_block::prepare(THD *thd, mem_root_deque<Item *> *insert_field_list) {
 
   resolve_place = RESOLVE_SELECT_LIST;
 
-  if (with_wild && setup_wild(thd)) return true;
-  if (setup_base_ref_items(thd)) return true; /* purecov: inspected */
+  if (with_wild && setup_wild(thd)) return true;  // 把 * 符号转换为字段
+  if (setup_base_ref_items(thd)) return true; /* purecov: inspected */  // 设置 base_ref_items
 
-  if (setup_fields(thd, thd->want_privilege, /*allow_sum_func=*/true,
+  if (setup_fields(thd, thd->want_privilege, /*allow_sum_func=*/true, // 检查查询的字段是否存在，然后把当前数据填充到字段的结构体中
                    /*split_sum_funcs=*/true, /*column_update=*/false,
                    insert_field_list, &fields, base_ref_items))
     return true;
@@ -297,7 +315,7 @@ bool Query_block::prepare(THD *thd, mem_root_deque<Item *> *insert_field_list) {
 
   // Set up the GROUP BY clause
   int all_fields_count = fields.size();
-  if (group_list.elements && setup_group(thd)) return true;
+  if (group_list.elements && setup_group(thd)) return true; // 检查 group by 的字段是否合法
   hidden_group_field_count = fields.size() - all_fields_count;
 
   // Allow local set functions in HAVING and ORDER BY
@@ -345,7 +363,7 @@ bool Query_block::prepare(THD *thd, mem_root_deque<Item *> *insert_field_list) {
 
   if (m_having_cond != nullptr) {
     if (olap == ROLLUP_TYPE) {
-      m_having_cond = resolve_rollup_item(thd, m_having_cond);
+      m_having_cond = resolve_rollup_item(thd, m_having_cond);  // 处理 rollup 
       if (m_having_cond == nullptr) {
         return true;
       }
@@ -434,7 +452,7 @@ bool Query_block::prepare(THD *thd, mem_root_deque<Item *> *insert_field_list) {
   if (unit->item &&                           // 1)
       !thd->lex->is_view_context_analysis())  // 2)
   {
-    if (remove_redundant_subquery_clauses(thd)) return true;
+    if (remove_redundant_subquery_clauses(thd)) return true;  // 子查询不支持 LIMIT ,所以会移除它的 ORDER BY、DISTINCT，如果没　aggregate functions　则会移除　GROUP BY 子句
   }
 
   /*
@@ -445,14 +463,14 @@ bool Query_block::prepare(THD *thd, mem_root_deque<Item *> *insert_field_list) {
   */
   const size_t fields_cnt = fields.size();
   if (m_windows.elements != 0 &&
-      Window::setup_windows1(thd, this, base_ref_items, get_table_list(),
+      Window::setup_windows1(thd, this, base_ref_items, get_table_list(),  // 处理窗口函数
                              &fields, &m_windows))
     return true;
 
   bool added_new_sum_funcs = fields.size() > fields_cnt;
 
   if (order_list.elements) {
-    if (setup_order_final(thd)) return true; /* purecov: inspected */
+    if (setup_order_final(thd)) return true; /* purecov: inspected */  // 该 Query_block 完全 resolved 后，处理 order by 句子
     added_new_sum_funcs = true;
   }
 
@@ -492,7 +510,7 @@ bool Query_block::prepare(THD *thd, mem_root_deque<Item *> *insert_field_list) {
        (parent_lex->m_sql_cmd != nullptr &&
         thd->secondary_engine_optimization() ==
             Secondary_engine_optimization::SECONDARY)) &&
-      transform_scalar_subqueries_to_join_with_derived(thd))
+      transform_scalar_subqueries_to_join_with_derived(thd))  // 把标量子查询转换为 join 派生表
     return true; /* purecov: inspected */
 
   /*
@@ -569,7 +587,7 @@ bool Query_block::prepare(THD *thd, mem_root_deque<Item *> *insert_field_list) {
   }
 
   // Setup full-text functions after resolving HAVING
-  if (has_ft_funcs()) {
+  if (has_ft_funcs()) { // 处理完 HAVING 语句后，处理 full-text 函数
     // The full-text search function cannot be called after aggregation, as it
     // needs the underlying scan to be positioned on the correct row. Therefore,
     // lift calls to the full-text search MATCH function to the SELECT list (as
@@ -582,9 +600,9 @@ bool Query_block::prepare(THD *thd, mem_root_deque<Item *> *insert_field_list) {
     if (setup_ftfuncs(thd, this)) return true;
   }
 
-  if (query_result() && query_result()->prepare(thd, fields, unit)) return true;
+  if (query_result() && query_result()->prepare(thd, fields, unit)) return true;  // m_query_result->unit = unit
 
-  if (has_sj_candidates() && flatten_subqueries(thd)) return true;
+  if (has_sj_candidates() && flatten_subqueries(thd)) return true;  // 展开可以转换为 semic join 的子查询
 
   set_sj_candidates(nullptr);
 
@@ -628,7 +646,7 @@ bool Query_block::prepare(THD *thd, mem_root_deque<Item *> *insert_field_list) {
       apply_local_transforms() is initiated only by the top query, and then
       recurses into subqueries.
      */
-    if (apply_local_transforms(thd, true)) return true;
+    if (apply_local_transforms(thd, true)) return true; // Query_block 应用本地变换
   }
 
   // Eliminate unused window definitions, redundant sorts etc.
@@ -785,6 +803,13 @@ bool Query_block::prepare_values(THD *thd) {
 }
 
 /**
+  1、删除派生表中多余的字段
+  2、子查询内部 Query_block 执行本地转换
+  3、如果条件允许，则把 outer join 转换为 inner join。去掉 join 语句中多余的括号，检查 join 谓词是否合法
+  4、更新 Table_ref 的 outer_join、sj_inner_tables、sj_nests
+  5、把一些条件下推给派生表，这有助于派生表内部可以把LEFT JOIN 转换为 INNSER JOIN
+*/
+/**
   Apply local transformations, such as join nest simplification. 'Local' means
   that each transformation happens on one single query block.
   Also perform partition pruning, which is most effective after transformations
@@ -811,17 +836,17 @@ bool Query_block::apply_local_transforms(THD *thd, bool prune) {
     If query block contains one or more merged derived tables/views,
     walk through lists of columns in select lists and remove unused columns.
   */
-  if (derived_table_count) delete_unused_merged_columns(&m_table_nest);
+  if (derived_table_count) delete_unused_merged_columns(&m_table_nest); // 删除派生表中多余的字段
 
-  for (Query_expression *unit = first_inner_query_expression(); unit;
+  for (Query_expression *unit = first_inner_query_expression(); unit; // 遍历所有的子查询
        unit = unit->next_query_expression())
     for (auto qt : unit->query_terms<>())
-      if (qt->query_block()->apply_local_transforms(thd, true)) return true;
+      if (qt->query_block()->apply_local_transforms(thd, true)) return true;  // 子查询内部 Query_block 执行本地转换
 
   // Convert all outer joins to inner joins if possible
-  if (simplify_joins(thd, &m_table_nest, true, false, &m_where_cond))
+  if (simplify_joins(thd, &m_table_nest, true, false, &m_where_cond)) // 如果条件允许，则把 outer join 转换为 inner join。去掉 join 语句中多余的括号，检查 join 谓词是否合法
     return true;
-  if (record_join_nest_info(&m_table_nest)) return true;
+  if (record_join_nest_info(&m_table_nest)) return true;  // 更新 Table_ref 的 outer_join、sj_inner_tables、sj_nests
   build_bitmap_for_nested_joins(&m_table_nest, 0);
 
   /*
@@ -885,7 +910,7 @@ bool Query_block::apply_local_transforms(THD *thd, bool prune) {
      - a pushed-down condition cannot help to convert LEFT JOIN to inner join
      inside a derived table's definition.
    */
-  if (outer_query_block() == nullptr && push_conditions_to_derived_tables(thd))
+  if (outer_query_block() == nullptr && push_conditions_to_derived_tables(thd)) // 把一些条件下推给派生表，这有助于派生表内部可以把LEFT JOIN 转换为 INNSER JOIN
     return true;
 
   return false;
@@ -1202,6 +1227,14 @@ bool Query_block::check_view_privileges(THD *thd, ulong want_privilege_first,
 }
 
 /**
+  1、遍历 m_table_list，存放到 leaf_tables 中
+  2、遍历 leaf_tables，
+      2.1 更新 Table_ref 的 tableno、
+      2.2 更新 Table_ref 的 table 的 索引使用情况
+      2.3 更新 Table_ref->partitioned_table_count
+ * 
+*/
+/**
   Set up table leaves in the query block based on list of tables.
 
   @param thd           Thread handler
@@ -1228,7 +1261,7 @@ bool Query_block::setup_tables(THD *thd, Table_ref *tables,
          (context.table_list && context.first_name_resolution_table));
 
   leaf_tables = nullptr;
-  (void)make_leaf_tables(&leaf_tables, tables);
+  (void)make_leaf_tables(&leaf_tables, tables); // 遍历 m_table_list，存放到 leaf_tables 中
 
   Table_ref *first_query_block_table = nullptr;
   if (select_insert) {
@@ -1260,7 +1293,7 @@ bool Query_block::setup_tables(THD *thd, Table_ref *tables,
       my_error(ER_TOO_MANY_TABLES, MYF(0), static_cast<int>(MAX_TABLES));
       return true;
     }
-    tr->set_tableno(tableno);
+    tr->set_tableno(tableno); // leaf_tables 中的 tableno 在本 Query_block 中从 0 开始递增
     leaf_table_count++;  // Count the input tables of the query
 
     if (opt_hints_qb &&        // QB hints initialized
@@ -1999,7 +2032,7 @@ bool Query_block::simplify_joins(THD *thd,
 
   @return False if successful, True if failure
 */
-bool Query_block::record_join_nest_info(mem_root_deque<Table_ref *> *tables) {
+bool Query_block::record_join_nest_info(mem_root_deque<Table_ref *> *tables) {  // 更新 Table_ref 的 outer_join、sj_inner_tables、sj_nests
   for (Table_ref *table : *tables) {
     if (table->nested_join == nullptr) {
       if (table->join_cond()) outer_join |= table->map();

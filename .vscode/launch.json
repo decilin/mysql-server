@@ -1,0 +1,48 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            
+            "name": "(gdb) Launch",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/runtime_output_directory/mysqld-debug",
+            "args": [
+                "--user=mysql",
+                "--datadir=${workspaceFolder}/build/runtime_output_directory/../../data",
+                "--socket=${workspaceFolder}/build/runtime_output_directory/../../data/mysql.sock.lock"
+                //"--lower-case-table-names=1"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${fileDirname}",
+            "environment": [],
+            "externalConsole": false,
+            //"MIMode": "gdb",
+            "miDebuggerPath": "/data/ldc_docker/gdb-14.2/gdb/gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": false
+                },
+                {
+                    "description": "Set Disassembly Flavor to Intel",
+                    "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": false
+                },
+                {
+                    "description": "取消 GDB 输出结果的字数限制",
+                    "text": "-gdb-set print elements 0",
+                    "ignoreFailures": false
+                },
+                {
+                    "description": "美化 GDB 打印结果",
+                    "text": "-gdb-set print pretty on",
+                    "ignoreFailures": false
+                }
+    }
+    ]
+}

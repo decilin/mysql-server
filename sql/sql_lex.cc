@@ -2823,7 +2823,10 @@ static void print_table_array(const THD *thd, String *str,
       op = " semi join ";
     else if (curr->outer_join) {
       /* MySQL converts right to left joins */
-      op = " left join ";
+      if (curr->full_join)
+        op = " full join ";
+      else
+        op = " left join ";
     } else if (!first || cond) {
       /*
         If it's the first table, and it has an ON condition (can happen due to

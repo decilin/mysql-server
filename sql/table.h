@@ -2474,8 +2474,8 @@ struct TABLE {
   const histograms::Histogram *find_histogram(uint field_index) const;
 };
 
-static inline void empty_record(TABLE *table) {
-  restore_record(table, s->default_values);
+static inline void empty_record(TABLE *table) { //  memcpy((table)->record[0], (table)->s->default_values, (size_t)(table)->s->reclength) 和 memset(table->null_flags, 255, table->s->null_bytes);
+  restore_record(table, s->default_values); // 实际执行的是  memcpy((table)->record[0], (table)->s->default_values, (size_t)(table)->s->reclength)
   if (table->s->null_bytes > 0)
     memset(table->null_flags, 255, table->s->null_bytes);
 }
@@ -3775,6 +3775,7 @@ class Table_ref {
   /// argument of LEFT JOIN, if argument of INNER JOIN; RIGHT JOINs are
   /// converted to LEFT JOIN during contextualization).
   bool outer_join{false};
+  bool full_join{false};
   /// True if was originally the left argument of a RIGHT JOIN, before we
   /// made it the right argument of a LEFT JOIN.
   bool join_order_swapped{false};

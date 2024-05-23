@@ -89,14 +89,14 @@ class ImmutableStringWithLength {
 };
 
 // From protobuf.
-inline uint64_t ZigZagEncode64(int64_t n) {
+inline uint64_t ZigZagEncode64(int64_t n) { // `ZigZagEncode64`函数接受一个64位有符号整数`n`，并返回一个64位无符号整数。它的工作原理是先将`n`左移一位，然后将结果与`n`右移63位的结果进行异或操作。这样，正整数被编码为它的两倍，而负整数被编码为它的相反数的两倍减1。
   // Note:  the right-shift must be arithmetic
   // Note:  left shift must be unsigned because of overflow
   return (static_cast<uint64_t>(n) << 1) ^ static_cast<uint64_t>(n >> 63);
-}
+} // 这两个函数是用于实现ZigZag编码和解码的。ZigZag编码是一种常用于数据存储和通信协议的编码方式，它可以将有符号整数映射到无符号整数，从而使得负整数也可以用变长编码（如Protocol Buffers中的Varint）来表示。
 
 // From protobuf.
-inline int64_t ZigZagDecode64(uint64_t n) {
+inline int64_t ZigZagDecode64(uint64_t n) { // `ZigZagDecode64`函数接受一个64位无符号整数`n`，并返回一个64位有符号整数。它的工作原理是先将`n`右移一位，然后将结果与`n`的最低位取反加1的结果进行异或操作。这样，经过ZigZag编码的正整数和负整数都可以被正确地解码回原来的值。
   // Note:  Using unsigned types prevent undefined behavior
   return static_cast<int64_t>((n >> 1) ^ (~(n & 1) + 1));
 }
@@ -108,20 +108,20 @@ std::pair<const char *, uint64_t> VarintParseSlow64(const char *p,
 
 // From protobuf. Included here because protobuf 3.6 does not expose the
 // parse_context.h header to clients.
-inline const char *VarintParse64(const char *p, uint64_t *out) {
-  auto ptr = pointer_cast<const uint8_t *>(p);
-  uint32_t res = ptr[0];
+inline const char *VarintParse64(const char *p, uint64_t *out) {  // 解析64位变长整数（Varint） (变长整数是一种常用于数据存储和通信协议的编码方式，它可以用不同数量的字节来表示整数，以节省空间。这种编码方式在Google的Protocol Buffers中被广泛使用。)
+  auto ptr = pointer_cast<const uint8_t *>(p);  // 1. 首先，它将输入的字符指针`p`转换为一个无符号8位整数指针`ptr`
+  uint32_t res = ptr[0];  // 2. 然后，它读取`ptr`指向的第一个字节，并检查这个字节的最高位（第7位）。如果这个位是0，那么这个字节就是整个变长整数的全部内容，函数将这个字节的值存储在`out`指向的位置，并返回`p + 1`。
   if (!(res & 0x80)) {
     *out = res;
     return p + 1;
   }
-  uint32_t x = ptr[1];
+  uint32_t x = ptr[1];  // 3. 如果第一个字节的最高位是1，那么变长整数的其他部分将在后续的字节中。函数接着读取第二个字节，并将其值左移7位后加到第一个字节的值上，形成一个新的结果`res`。
   res += (x - 1) << 7;
-  if (!(x & 0x80)) {
+  if (!(x & 0x80)) {  // 4. 函数再次检查新读取的字节的最高位。如果这个位是0，那么这两个字节就是整个变长整数的全部内容，函数将结果`res`存储在`out`指向的位置，并返回`p + 2`。
     *out = res;
     return p + 2;
   }
-  auto tmp = VarintParseSlow64(p, res);
+  auto tmp = VarintParseSlow64(p, res); //  5. 如果第二个字节的最高位也是1，那么变长整数的其他部分将在更多的字节中。函数此时调用`VarintParseSlow64`函数来处理更复杂的情况。
   *out = tmp.second;
   return tmp.first;
 }

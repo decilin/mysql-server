@@ -360,7 +360,7 @@ bool JOIN::optimize(bool finalize_access_paths) {
   trace_optimize.add_select_number(query_block->select_number);
   Opt_trace_array trace_steps(trace, "steps");
 
-  count_field_types(query_block, &tmp_table_param, *fields, false, false);
+  count_field_types(query_block, &tmp_table_param, *fields, false, false);  // 为临时表创建字段
 
   assert(tmp_table_param.sum_func_count == 0 || !group_list.empty() ||
          implicit_grouping);
@@ -375,7 +375,7 @@ bool JOIN::optimize(bool finalize_access_paths) {
 
   if (alloc_func_list()) return true; /* purecov: inspected */
 
-  if (query_block->get_optimizable_conditions(thd, &where_cond, &having_cond))
+  if (query_block->get_optimizable_conditions(thd, &where_cond, &having_cond))  // 拷贝赋值 m_where_cond 的 m_where_cond、m_where_cond
     return true;
 
   for (Item_rollup_group_item *item : query_block->rollup_group_items) {
@@ -387,9 +387,9 @@ bool JOIN::optimize(bool finalize_access_paths) {
 
   set_optimized();
 
-  tables_list = query_block->leaf_tables;
+  tables_list = query_block->leaf_tables; // 设置 tables_list 为 query_block->leaf_tables
 
-  if (alloc_indirection_slices()) return true;
+  if (alloc_indirection_slices()) return true;  // 为 ref_items、tmp_fields 分配内存
 
   // The base ref items from query block are assigned as JOIN's ref items
   ref_items[REF_SLICE_ACTIVE] = query_block->base_ref_items;
@@ -471,7 +471,7 @@ bool JOIN::optimize(bool finalize_access_paths) {
   }
 
   if (where_cond || query_block->outer_join) {
-    if (optimize_cond(thd, &where_cond, &cond_equal, &query_block->m_table_nest,
+    if (optimize_cond(thd, &where_cond, &cond_equal, &query_block->m_table_nest,  // 1、构建 MEP   2、常量替换   3、移除恒值的条件
                       &query_block->cond_value)) {
       error = 1;
       DBUG_PRINT("error", ("Error from optimize_cond"));
@@ -485,7 +485,7 @@ bool JOIN::optimize(bool finalize_access_paths) {
     }
   }
   if (having_cond) {
-    if (optimize_cond(thd, &having_cond, &cond_equal, nullptr,
+    if (optimize_cond(thd, &having_cond, &cond_equal, nullptr,  // 1、构建 MEP   2、常量替换   3、移除恒值的条件
                       &query_block->having_value)) {
       error = 1;
       DBUG_PRINT("error", ("Error from optimize_cond"));
@@ -600,8 +600,8 @@ bool JOIN::optimize(bool finalize_access_paths) {
   }
 
   if (!thd->lex->using_hypergraph_optimizer()) {
-    sort_by_table = get_sort_by_table(order.order, group_list.order,
-                                      query_block->leaf_tables);
+  sort_by_table = get_sort_by_table(order.order, group_list.order,
+                                    query_block->leaf_tables);
   }
 
   if ((where_cond || !group_list.empty() || !order.empty()) &&
@@ -2985,7 +2985,7 @@ void JOIN::adjust_access_methods() {
         // Cleanup quick, REF/REF_OR_NULL/EQ_REF, will be clarified later
         if (tab->range_scan() != nullptr) {
           ::destroy_at(tab->range_scan());
-          tab->set_range_scan(nullptr);
+        tab->set_range_scan(nullptr);
         }
       }
     }
@@ -3818,30 +3818,32 @@ static bool check_simple_equality(THD *thd, Item *left_item, Item *right_item,
   *simple_equality = false;
 
   if (left_item->type() == Item::REF_ITEM &&
-      down_cast<Item_ref *>(left_item)->ref_type() == Item_ref::VIEW_REF) {
-    if (down_cast<Item_ref *>(left_item)->is_outer_reference()) return false;
-    left_item = left_item->real_item();
+      down_cast<Item_ref *>(left_item)->ref_type() == Item_ref::VIEW_REF) {     // 如果是 '@试图引用 =' 
+    if (down_cast<Item_ref *>(left_item)->is_outer_reference()) return false;   // 如果是外连接的引用则返回成功
+    left_item = left_item->real_item();                                         // 返回真实的 item
   }
   if (right_item->type() == Item::REF_ITEM &&
-      down_cast<Item_ref *>(right_item)->ref_type() == Item_ref::VIEW_REF) {
+      down_cast<Item_ref *>(right_item)->ref_type() == Item_ref::VIEW_REF) {    // 同上
     if (down_cast<Item_ref *>(right_item)->is_outer_reference()) return false;
     right_item = right_item->real_item();
   }
   const Item_field *left_item_field, *right_item_field;
 
-  if (left_item->type() == Item::FIELD_ITEM &&
+  if (left_item->type() == Item::FIELD_ITEM &&                                  // 如果是 '字段 = 字段'
       right_item->type() == Item::FIELD_ITEM &&
       (left_item_field = down_cast<const Item_field *>(left_item)) &&
       (right_item_field = down_cast<const Item_field *>(right_item)) &&
-      !left_item_field->depended_from && !right_item_field->depended_from) {
+      !left_item_field->depended_from && !right_item_field->depended_from) {    // 且这两个字段都没 depended from 别的 query_block
     /* The predicate the form field1=field2 is processed */
+    // 处理形式为 field1=field2 的谓词
 
     const Field *const left_field = left_item_field->field;
     const Field *const right_field = right_item_field->field;
 
-    if (!left_field->eq_def(right_field)) return false;
+    if (!left_field->eq_def(right_field)) return false;                         // 如果等式左右两边的数据类型不一致，则返回 false
 
     /* Search for multiple equalities containing field1 and/or field2 */
+    // 搜索包含 field1 和/或 field2 的多个等式
     bool left_copyfl, right_copyfl;
     Item_equal *left_item_equal =
         find_item_equal(cond_equal, left_item_field, &left_copyfl);
@@ -3849,6 +3851,8 @@ static bool check_simple_equality(THD *thd, Item *left_item, Item *right_item,
         find_item_equal(cond_equal, right_item_field, &right_copyfl);
 
     /* As (NULL=NULL) != TRUE we can't just remove the predicate f=f */
+    // 由于 (NULL=NULL) != TRUE，我们不能简单地删除谓词 f=f
+    // eq 函数中已经过滤 NULL=NULL 的场景
     if (left_field->eq(right_field)) /* f = f */
     {
       *simple_equality =
@@ -3863,19 +3867,23 @@ static bool check_simple_equality(THD *thd, Item *left_item, Item *right_item,
         multiple equalities, i.e the condition is already covered
         by upper level equalities
       */
+      // 等式谓词是已有多个等式的推断，即条件已由上层等式覆盖
       *simple_equality = true;
       return false;
     }
 
     /* Copy the found multiple equalities at the current level if needed */
+    // 如果需要，将找到的多个等式复制到当前级别
     if (left_copyfl) {
       /* left_item_equal of an upper level contains left_item */
+      // 上层的 left_item_equal 包含 left_item 
       left_item_equal = new Item_equal(left_item_equal);
       if (left_item_equal == nullptr) return true;
       cond_equal->current_level.push_back(left_item_equal);
     }
     if (right_copyfl) {
       /* right_item_equal of an upper level contains right_item */
+      // 上层的 right_item_equal 包含 right_item
       right_item_equal = new Item_equal(right_item_equal);
       if (right_item_equal == nullptr) return true;
       cond_equal->current_level.push_back(right_item_equal);
@@ -3883,12 +3891,15 @@ static bool check_simple_equality(THD *thd, Item *left_item, Item *right_item,
 
     if (left_item_equal) {
       /* left item was found in the current or one of the upper levels */
+      // 在当前级别或其中一个上层找到了左项
       if (!right_item_equal)
         left_item_equal->add(down_cast<Item_field *>(right_item));
       else {
         /* Merge two multiple equalities forming a new one */
+        // 合并两个多个等式以形成新的等式
         if (left_item_equal->merge(thd, right_item_equal)) return true;
         /* Remove the merged multiple equality from the list */
+        // 从列表中删除合并的多个等式
         List_iterator<Item_equal> li(cond_equal->current_level);
         while ((li++) != right_item_equal)
           ;
@@ -3896,10 +3907,12 @@ static bool check_simple_equality(THD *thd, Item *left_item, Item *right_item,
       }
     } else {
       /* left item was not found neither the current nor in upper levels  */
+      // 在当前级别或上层未找到左项
       if (right_item_equal) {
         right_item_equal->add(down_cast<Item_field *>(left_item));
       } else {
         /* None of the fields was found in multiple equalities */
+        // 没有在多个等式中找到任何字段
         Item_equal *item_equal =
             new Item_equal(down_cast<Item_field *>(left_item),
                            down_cast<Item_field *>(right_item));
@@ -3913,6 +3926,7 @@ static bool check_simple_equality(THD *thd, Item *left_item, Item *right_item,
 
   {
     /* The predicate of the form field=const/const=field is processed */
+    // 处理形式为 field=const/const=field 的谓词
     Item *const_item = nullptr;
     Item_field *field_item = nullptr;
     if (left_item->type() == Item::FIELD_ITEM &&
@@ -3928,6 +3942,7 @@ static bool check_simple_equality(THD *thd, Item *left_item, Item *right_item,
     }
 
     // Don't evaluate subqueries if they are disabled during optimization.
+    // 如果在优化期间禁用了子查询，则不要计算它们
     if (const_item != nullptr &&
         !evaluate_during_optimization(const_item,
                                       thd->lex->current_query_block()))
@@ -3939,40 +3954,47 @@ static bool check_simple_equality(THD *thd, Item *left_item, Item *right_item,
       field with the constant expression as it makes the predicates
       more complex and may introduce cycles in the Item tree.
     */
+    /*
+      如果常量表达式包含对字段的引用（例如，a = (a IS NULL)），我们不希望将字段替换为常量表达式，
+      因为这会使谓词更复杂，并可能在Item树中引入循环。
+    */
     if (const_item != nullptr &&
         const_item->walk(&Item::find_field_processor, enum_walk::POSTFIX,
                          pointer_cast<uchar *>(field_item->field)))
       return false;
 
-    if (const_item && field_item->result_type() == const_item->result_type()) {
-      if (field_item->result_type() == STRING_RESULT) {
+    if (const_item && field_item->result_type() == const_item->result_type()) {     // 如果 field_item 和 const_item 的 result_type() 一致
+      if (field_item->result_type() == STRING_RESULT) {     // 如果是 STRING_RESULT
         const CHARSET_INFO *cs = field_item->field->charset();
         if (!item) {
-          Item_func_eq *const eq_item = new Item_func_eq(left_item, right_item);
+          Item_func_eq *const eq_item = new Item_func_eq(left_item, right_item);    // 构建 Item_func_eq，然后赋值给 item
           if (eq_item == nullptr || eq_item->set_cmp_func()) return true;
           eq_item->quick_fix_field();
           item = eq_item;
         }
-        if ((cs != down_cast<Item_func *>(item)->compare_collation()) ||
+        if ((cs != down_cast<Item_func *>(item)->compare_collation()) ||     // 如果 const_item 的字符集跟 item 的字符集不一样
             !cs->coll->propagate(cs, nullptr, 0))
           return false;
         // Don't build multiple equalities mixing strings and JSON, not even
         // when they have the same collation, since string comparison and JSON
         // comparison are very different.
-        if ((field_item->data_type() == MYSQL_TYPE_JSON) !=
+        if ((field_item->data_type() == MYSQL_TYPE_JSON) !=     // 如果 field_item 或者 const_item 是 JSON 数据类型，则不构建 MES
             (const_item->data_type() == MYSQL_TYPE_JSON)) {
           return false;
         }
         // Similarly, strings and temporal types have different semantics for
         // equality comparison.
+        // 类型为字符串和时间的类型对于等式比较具有不同的语义
         if (const_item->is_temporal()) {
           // No multiple equality for string columns compared to temporal
           // values. See also comment in comparable_in_index().
+          // 不要为与时间值进行比较的字符串列构建多个等式。另请参阅comparable_in_index()中的注释
           if (!field_item->is_temporal()) {
             return false;
           }
           // No multiple equality for TIME columns compared to temporal values.
           // See also comment in comparable_in_index().
+          // 不要为与时间值进行比较的TIME列构建多个等式。另请参阅comparable_in_index()中的注释
           if (const_item->is_temporal_with_date() &&
               !field_item->is_temporal_with_date()) {
             return false;
@@ -3991,6 +4013,7 @@ static bool check_simple_equality(THD *thd, Item *left_item, Item *right_item,
         if (item_equal->const_arg() != nullptr) {
           // Make sure that the existing const and new one are of comparable
           // collation.
+          // 确保现有的常量和新的常量是可比较的排序规则
           DTCollation cmp_collation;
           if (cmp_collation.set(const_item->collation,
                                 item_equal->const_arg()->collation,
@@ -4004,6 +4027,7 @@ static bool check_simple_equality(THD *thd, Item *left_item, Item *right_item,
           already contains a constant and its value is  not equal to
           the value of const_item.
         */
+        // 如果 item_equal 已包含常量并且其值与 const_item 的值不相等，则将 cond_false 标志设置为 1
         if (item_equal->add(thd, const_item, field_item)) return true;
       } else {
         item_equal = new Item_equal(const_item, field_item);
@@ -4041,6 +4065,15 @@ static bool check_simple_equality(THD *thd, Item *left_item, Item *right_item,
                     simple equalities.
 
   @returns false if conversion succeeded, true if any error.
+*/
+/*
+将行相等性转换为正常等式。
+
+  该函数将形如 (E1,...,En)=(E'1,...,E'n) 的行相等性转换为等式列表 E1=E'1,...,En=E'n。
+  对于每个等式 Ei=E'i，函数检查它是否是一个简单等式或者行相等性。
+  如果它是一个简单等式，它将用于扩展 cond_equal 中的多重相等性。
+  如果它是一个行相等性，它将被转换为行元素之间的等式序列。
+  如果 Ei=E'i 既不是简单等式也不是行相等性，那么这个谓词的项将被添加到 eq_list 中
 */
 
 static bool check_row_equality(THD *thd, Item *left_row, Item_row *right_row,
@@ -4119,6 +4152,19 @@ static bool check_row_equality(THD *thd, Item *left_row, Item_row *right_row,
   we would not come to this function. And injecting constants is good because
   it makes the materialized table smaller.
 */
+/**
+  消除行相等性并形成多重相等性谓词。
+
+  此函数检查项是否是简单等式，即将字段与另一个字段或常量（field=field_item 或 field=constant_item）相等的项，或者是行相等性。
+  对于简单等式，该函数查找通过 cond_equal 直接或间接引用的列表中的多重等式，推断给定的简单等式。
+  如果找不到任何等式，则构建/扩展多重等式以覆盖谓词。
+  行相等性被消除，替换为作为原始等式谓词的连词规则，以与原始等式谓词相同的方式处理。
+
+  @note 如果等式是由 IN->EXISTS 创建的，则可能稍后会被子查询实现删除。
+  因此，我们不将此可能是临时性等式与其他等式混合; 如果让它进入多重等式（Item_equal）中，那么我们以后就无法删除它。
+  然而，有一个例外：如果外部表达式是常量，则安全地将等式留在物化表中；它所能做的就是阻止 NULL/FALSE 区分，但如果这种区分很重要，则等式将在触发条件中，所以我们不会来到这个函数。
+  并且注入常量是好的，因为它使物化的表更小。
+*/
 
 static bool check_equality(THD *thd, Item *item, COND_EQUAL *cond_equal,
                            List<Item> *eq_list, bool *equality) {
@@ -4127,7 +4173,7 @@ static bool check_equality(THD *thd, Item *item, COND_EQUAL *cond_equal,
   Item_func *item_func;
   if (item->type() == Item::FUNC_ITEM &&
       (item_func = down_cast<Item_func *>(item))->functype() ==
-          Item_func::EQ_FUNC) {
+          Item_func::EQ_FUNC) {    // 如果 item 是 FUNC_ITEM ，则转换为 Item_func，如果转换后是 EQ_FUNC 
     Item *left_item = item_func->arguments()[0];
     Item *right_item = item_func->arguments()[1];
 
@@ -4135,7 +4181,7 @@ static bool check_equality(THD *thd, Item *item, COND_EQUAL *cond_equal,
       return false;  // See note above
 
     if (left_item->type() == Item::ROW_ITEM &&
-        right_item->type() == Item::ROW_ITEM) {
+        right_item->type() == Item::ROW_ITEM) {     // 如果等式两边都是 ROW_ITEM
       thd->lex->current_query_block()->cond_count--;
       return check_row_equality(thd, down_cast<Item_row *>(left_item),
                                 down_cast<Item_row *>(right_item), cond_equal,
@@ -4214,6 +4260,55 @@ static bool check_equality(THD *thd, Item *item, COND_EQUAL *cond_equal,
   @returns false if success, true if error
 */
 
+/*
+  将条件中的所有等式谓词替换为多重等式项。
+
+  在每个 'and' 级别，该函数检测等式谓词的项，并将它们替换为一组多重等式项（Item_equal），
+  同时考虑来自上层的继承等式。
+  如果一个等式谓词不是在连词 (如and、not、or) 中使用，它将仅被替换为一个多重等式谓词。
+  对于每个 'and' 级别，函数会在与关联对象中设置一个指向继承多重等式的指针。
+  函数还遍历条件树，并为每个字段引用设置一个指向包含该字段的多重等式项的指针，
+  如果存在的话。如果这个多重等式将字段等于一个常量，当字段不是字符串类型时，
+  或者当字段引用只是比较谓词的一个参数时，函数将字段引用替换为常量。
+  函数还确定每个 Item_cond_and 对象的等式列表中的最大成员数量，
+  并将其分配给 thd->lex->current_query_block()->max_equal_elems。
+
+  @note
+    多重等式谓词 =(f1,...fn) 等价于 f1=f2, .., fn-1=fn 的连词。
+    它替换了这些等式谓词的任何推断，这些推断等价于合取。
+    因此，=(a1,a2,a3) 可以替换 ((a1=a3) AND (a2=a3) AND (a2=a1))，
+    因为它等价于 ((a1=a2) AND (a2=a3))。
+    函数总是将所有等式谓词的替换作为一个最小集合的多重等式谓词。
+    这个集合可以被认为是等式谓词的子连词的规范表示。
+    例如，(t1.a=t2.b AND t2.b>5 AND t1.a=t3.c) 被替换为
+    (=(t1.a,t2.b,t3.c) AND t2.b>5)，而不是
+    (=(t1.a,t2.b) AND =(t1.a,t3.c) AND t2.b>5)；
+    而 (t1.a=t2.b AND t2.b>5 AND t3.c=t4.d) 被替换为
+    (=(t1.a,t2.b) AND =(t3.c=t4.d) AND t2.b>5)，
+    但如果另外继承了 =(t4.d,t2.b)，它将被替换为
+    (=(t1.a,t2.b,t3.c,t4.d) AND t2.b>5)。
+
+    函数通过递归遍历条件树进行替换，向下一个 'and' 级别传递一个多重
+    等式谓词链，这些谓词已经在更高级别构建。
+    在每个 'and' 级别构建的 Item_equal 项被附加到其他非等式合取项作为子列表。
+    继承的多重等式的指针保存在 and 条件对象（Item_cond_and）中。
+    此链允许我们对于任何字段引用出现轻松地找到必须保持的多重等式。
+    对于每个 AND 级别，我们执行以下操作：
+    - 扫描它以检测所有等式谓词（=）项
+    - 将它们连接成不相交的 Item_equal() 组
+    - 递归处理包含的 OR 条件，以便为较低的 AND 级别做同样的处理
+
+    我们需要按照这个顺序进行操作，因为较低的 AND 级别需要知道上层所有可能的 Item_equal 对象。
+
+  @param thd           线程句柄
+  @param cond          要进行替换的条件（表达式）
+  @param[out] retcond  返回的条件
+  @param inherited     所有继承多重等式项的路径
+  @param do_inherit    是否继承来自条件的其他部分的等式
+
+  @returns 如果成功则为 false，如果出现任何错误则为 true
+*/
+
 static bool build_equal_items_for_cond(THD *thd, Item *cond, Item **retcond,
                                        COND_EQUAL *inherited, bool do_inherit) {
   Item_equal *item_equal;
@@ -4224,7 +4319,7 @@ static bool build_equal_items_for_cond(THD *thd, Item *cond, Item **retcond,
     return true;  // Fatal error flag is set!
 
   const enum Item::Type cond_type = cond->type();
-  if (cond_type == Item::COND_ITEM) {
+  if (cond_type == Item::COND_ITEM) {     // 如果 cond 是 COND_ITEM 类型
     List<Item> eq_list;
     Item_cond *const item_cond = down_cast<Item_cond *>(cond);
     const bool and_level = item_cond->functype() == Item_func::COND_AND_FUNC;
@@ -4240,12 +4335,20 @@ static bool build_equal_items_for_cond(THD *thd, Item *cond, Item **retcond,
          removing each such predicate from the conjunction after having
          found/created a multiple equality whose inference the predicate is.
        */
+      /*
+         获取此级别的所有连词，并检测那些等于谓词
+         可以被多重等式项替换，并在找到/创建了多重等式之后从连词中移除每个这样的谓词。
+       */
       while ((item = li++)) {
         /*
           PS/SP note: we can safely remove a node from AND-OR
           structure here because it's restored before each
           re-execution of any prepared statement/stored procedure.
         */
+        /*
+          PS/SP 注意：我们可以安全地在这里从 AND-OR 结构中移除一个节点，
+          因为它会在每次准备执行任何预处理语句/存储过程之前恢复。
+         */
         bool equality;
         if (check_equality(thd, item, &cond_equal, &eq_list, &equality))
           return true;
@@ -4256,6 +4359,7 @@ static bool build_equal_items_for_cond(THD *thd, Item *cond, Item **retcond,
         Check if we eliminated all the predicates of the level, e.g.
         (a=a AND b=b AND a=a).
       */
+      // 检查我们是否消除了该级别的所有谓词，例如 (a=a AND b=b AND a=a)
       if (!args->elements && !cond_equal.current_level.elements &&
           !eq_list.elements) {
         *retcond = new Item_func_true();
@@ -4279,6 +4383,7 @@ static bool build_equal_items_for_cond(THD *thd, Item *cond, Item **retcond,
        Make replacement of equality predicates for lower levels
        of the condition expression.
     */
+    // 替换条件表达式较低级别的等式谓词
     li.rewind();
     while ((item = li++)) {
       Item *new_item;
@@ -4292,6 +4397,11 @@ static bool build_equal_items_for_cond(THD *thd, Item *cond, Item **retcond,
           arguments of an AND/OR item, which are restored for each
           execution of PS/SP.
         */
+        /* 此替换仅发生在独立等式上 */
+        /*
+          这在 PS/SP 中是可以的，因为替换是针对 AND/OR 项的参数进行的，
+          这些参数会在每次执行 PS/SP 时恢复。
+        */
         li.replace(new_item);
       }
     }
@@ -4299,7 +4409,7 @@ static bool build_equal_items_for_cond(THD *thd, Item *cond, Item **retcond,
       args->concat(&eq_list);
       args->concat((List<Item> *)&cond_equal.current_level);
     }
-  } else if (cond->type() == Item::FUNC_ITEM) {
+  } else if (cond->type() == Item::FUNC_ITEM) {     // 如果 cond 是 FUNC_ITEM 类型
     List<Item> eq_list;
     /*
       If an equality predicate forms the whole and level,
@@ -4310,6 +4420,15 @@ static bool build_equal_items_for_cond(THD *thd, Item *cond, Item **retcond,
       In general we can't leave alone standalone eqalities:
       for WHERE a=b AND c=d AND (b=c OR d=5)
       b=c is replaced by =(a,b,c,d).
+     */
+    /*
+      如果等式谓词形成了整个 AND 级别，我们称之为独立等式，它在此处处理。
+      例如，在以下 where 条件中
+      WHERE a=5 AND (b=5 or a=c)
+      (b=5) 和 (a=c) 是独立等式。
+      通常情况下，我们不能保留独立等式：
+      对于 WHERE a=b AND c=d AND (b=c OR d=5)
+      b=c 将被替换为 =(a,b,c,d)。
      */
     bool equality;
     if (check_equality(thd, cond, &cond_equal, &eq_list, &equality))
@@ -4336,6 +4455,10 @@ static bool build_equal_items_for_cond(THD *thd, Item *cond, Item **retcond,
         /*
           Here a new AND level must be created. It can happen only
           when a row equality is processed as a standalone predicate.
+        */
+        /*
+          在此处必须创建一个新的 AND 级别。
+          这只会在将行相等性作为独立谓词处理时发生。
         */
         Item_cond_and *and_cond = new Item_cond_and(eq_list);
         if (and_cond == nullptr) return true;
@@ -4364,6 +4487,11 @@ static bool build_equal_items_for_cond(THD *thd, Item *cond, Item **retcond,
         set a pointer to the multiple equality it belongs to (if there is any)
         as soon the field is not of a string type or the field reference is
         an argument of a comparison predicate.
+      */
+      /*
+        对于条件中的每个字段引用，不是来自等式项谓词的字段引用，
+        只要字段不是字符串类型，或者字段引用只是比较谓词的一个参数，
+        就设置一个指向它所属的多重等式的指针（如果有的话）。
       */
       uchar *is_subst_valid = (uchar *)1;
       cond = cond->compile(&Item::subst_argument_checker, &is_subst_valid,
@@ -4451,8 +4579,10 @@ bool build_equal_items(THD *thd, Item *cond, Item **retcond,
   COND_EQUAL *cond_equal = nullptr;
 
   if (cond) {
+    // 构建多重相等性
     if (build_equal_items_for_cond(thd, cond, &cond, inherited, do_inherit))
       return true;
+    // // 更新使用的表
     cond->update_used_tables();
     // update_used_tables() returns void but can still fail.
     if (thd->is_error()) return true;
@@ -4464,17 +4594,19 @@ bool build_equal_items(THD *thd, Item *cond, Item **retcond,
     else if (cond_type == Item::FUNC_ITEM &&
              down_cast<Item_func *>(cond)->functype() ==
                  Item_func::MULT_EQUAL_FUNC) {
-      cond_equal = new (thd->mem_root) COND_EQUAL;
+      cond_equal = new (thd->mem_root) COND_EQUAL;     // 创建新的COND_EQUAL结构
       if (cond_equal == nullptr) return true;
-      cond_equal->current_level.push_back(down_cast<Item_equal *>(cond));
+      cond_equal->current_level.push_back(down_cast<Item_equal *>(cond));     // 将当前项添加到当前级别的多重相等性列表中
     }
   }
+  // 如果存在多重相等性，则设置继承
   if (cond_equal) {
     cond_equal->upper_levels = inherited;
     inherited = cond_equal;
   }
   *cond_equal_ref = cond_equal;
 
+  // 递归构建连接条件的多重相等性
   if (join_list) {
     for (Table_ref *table : *join_list) {
       if (table->join_cond_optim()) {
@@ -9469,8 +9601,8 @@ void JOIN::finalize_derived_keys() {
     make_cond_for_table().
 */
 
-Item *make_cond_for_table(THD *thd, Item *cond, table_map tables,
-                          table_map used_table, bool exclude_expensive_cond) {
+Item *make_cond_for_table(THD *thd, Item *cond, table_map tables, // 如果 used_table 涉及的表是 T1，大体是把 (T1.a = 1 and T2.b = 2) or (T1.a = 3 and T2.b = 4) 转换成 T1.a = 1 or T1.a = 3
+                          table_map used_table, bool exclude_expensive_cond) {  // 参数  tables 是 允许的非高成本的字段的表
   /*
     May encounter an Item_cache_int as "condition" here, so cannot
     assert that it satisfies is_bool_func().
@@ -9488,15 +9620,15 @@ Item *make_cond_for_table(THD *thd, Item *cond, table_map tables,
       !(cond->cost().IsExpensive() && used_table == tables))  // 3
     return nullptr;
 
-  if (cond->type() == Item::COND_ITEM) {
+  if (cond->type() == Item::COND_ITEM) {  // 如果 cond 是 Item_cond_and 或 Item_cond_or
     if (((Item_cond *)cond)->functype() == Item_func::COND_AND_FUNC) {
       /* Create new top level AND item */
       Item_cond_and *new_cond = new Item_cond_and;
       if (!new_cond) return nullptr;
       List_iterator<Item> li(*((Item_cond *)cond)->argument_list());
       Item *item;
-      while ((item = li++)) {
-        Item *fix = make_cond_for_table(thd, item, tables, used_table,
+      while ((item = li++)) {  // 遍历所有 AND 项
+        Item *fix = make_cond_for_table(thd, item, tables, used_table,  // 递归
                                         exclude_expensive_cond);
         if (fix) new_cond->argument_list()->push_back(fix);
       }
@@ -10302,7 +10434,7 @@ ORDER *JOIN::remove_const(ORDER *first_order, Item *cond, bool change,
 
   @returns false if success, true if error
 */
-
+// 1、构建 MEP   2、常量替换   3、移除恒值的条件
 bool optimize_cond(THD *thd, Item **cond, COND_EQUAL **cond_equal,
                    mem_root_deque<Table_ref *> *join_list,
                    Item::cond_result *cond_value) {
@@ -11406,7 +11538,7 @@ static uint32 get_key_length_tmp_table(Item *item) {
 
   return len;
 }
-
+// 如果项不访问任何表, 或者没有子查询，或者查询块未禁用子查询优化选项，则可以在优化期间评估
 bool evaluate_during_optimization(const Item *item, const Query_block *select) {
   /*
     Should only be called on items that are const_for_execution(), as those
@@ -11421,10 +11553,10 @@ bool evaluate_during_optimization(const Item *item, const Query_block *select) {
          (item->used_tables() & ~select->join->const_table_map) == 0);
 
   // If the Item does not access any tables, it can always be evaluated.
-  if (item->const_item()) return true;
+  if (item->const_item()) return true;     // 如果项不访问任何表，则始终可以进行评估
 
   return !item->has_subquery() || (select->active_options() &
-                                   OPTION_NO_SUBQUERY_DURING_OPTIMIZATION) == 0;
+                                   OPTION_NO_SUBQUERY_DURING_OPTIMIZATION) == 0;     // 如果项没有子查询，或者查询块未禁用子查询优化选项，则可以在优化期间评估
 }
 
 /// Does this path scan any base tables in a secondary engine?
@@ -11441,7 +11573,7 @@ static bool ReferencesSecondaryEngineBaseTables(AccessPath *path) {
   return found;
 }
 
-bool IteratorsAreNeeded(const THD *thd, AccessPath *root_path) {
+bool IteratorsAreNeeded(const THD *thd, AccessPath *root_path) {  // 如果没有 secondary_engine 则直接返回 true
   const handlerton *secondary_engine = SecondaryEngineHandlerton(thd);
 
   // Queries running in the primary engine always need iterators.
@@ -11704,7 +11836,7 @@ double EstimateRowAccesses(const AccessPath *path, double num_evaluations,
   return rows;
 }
 
-bool IsHashEquijoinCondition(const Item_eq_base *item, table_map left_side,
+bool IsHashEquijoinCondition(const Item_eq_base *item, table_map left_side, //item->get_arg(0)->used_tables() 跟 left_side 相交跟 right_side 不相交，item->get_arg(1)->used_tables() 也一样
                              table_map right_side) {
   // We are not able to create hash join conditions from row values consisting
   // of multiple columns, so let them be added as extra conditions instead.

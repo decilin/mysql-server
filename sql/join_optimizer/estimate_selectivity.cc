@@ -92,9 +92,9 @@ double HistogramSelectivity(const Field &field, string *trace) {
   selectivity of 'field' (i.e. 1/'number of rows in table') and return
   that. If there is no such index, return 1.0.
 */
-double KeyCap(const Field &field, uint key_no, string *trace) {
+double KeyCap(const Field &field, uint key_no, string *trace) { // 如果 field 是唯一索引，且给唯一索引的字段数为1，则返回 1.0/max(1.0,记录数)，否则返回 1
   assert(key_no < field.table->s->keys);
-  const KEY &key = field.table->key_info[key_no];
+  const KEY &key = field.table->key_info[key_no]; // 根据 field 和 key_no 获取 KEY
 
   // This is a less precise version of the single-row check in
   // CostingReceiver::ProposeRefAccess(). If true, we know that this index
@@ -105,14 +105,14 @@ double KeyCap(const Field &field, uint key_no, string *trace) {
   // entire EQ_REF-specific code, but that requires a more holistic
   // selectivity handling (for multipart indexes) and pulling out some of
   // the sargable code for precise detection of null-rejecting predicates.
-  if (!field.key_start.is_set(key_no) ||
+  if (!field.key_start.is_set(key_no) ||  // 如果没有以 field 开头的索引，或者不是唯一索引，或者?????，那么返回 1.0
       !Overlaps(actual_key_flags(&key), HA_NOSAME) ||
       key.actual_key_parts != 1) {
     return 1.0;
   }
 
   const double field_cap =
-      1.0 / std::max<double>(1.0, field.table->file->stats.records);
+      1.0 / std::max<double>(1.0, field.table->file->stats.records);  // 返回 1.0/max(1.0,记录数)
 
   if (trace != nullptr) {
     *trace += StringPrintf(
@@ -311,7 +311,7 @@ KeySelectivityResult EstimateSelectivityFromIndexStatistics(
   @returns The estimated selectivity of 'field' (or -1.0 if there was no
   suitable index or histogram).
 */
-double EstimateEqualPredicateSelectivity(const EqualFieldArray &equal_fields,
+double EstimateEqualPredicateSelectivity(const EqualFieldArray &equal_fields, // 根据 cardinality information from indexes 或者 根据 histograms，计算 equal_fields 
                                          const CompanionSet &companion_set,
                                          string *trace) {
   uint longest_prefix = 0;
@@ -319,13 +319,13 @@ double EstimateEqualPredicateSelectivity(const EqualFieldArray &equal_fields,
   double selectivity_cap = 1.0;
 
   for (const Field *equal_field : equal_fields) {
-    for (uint key_no = equal_field->part_of_key.get_first_set();
+    for (uint key_no = equal_field->part_of_key.get_first_set();  // 遍历包含该字段的索引编号
          key_no != MY_BIT_NONE;
          key_no = equal_field->part_of_key.get_next_set(key_no)) {
-      const KEY &key = equal_field->table->key_info[key_no];
+      const KEY &key = equal_field->table->key_info[key_no];  // 根据索引编号查找 KEY
       KeySelectivityResult key_data{-1.0, 0};
 
-      const double key_cap = KeyCap(*equal_field, key_no, trace);
+      const double key_cap = KeyCap(*equal_field, key_no, trace); // 如果 field 是唯一索引，且给唯一索引的字段数为1，则返回 1.0/max(1.0,记录数)，否则返回 1
       if (key_cap < 1.0) {
         key_data = {key_cap, 1};
       } else if (key.has_records_per_key(0)) {
@@ -367,7 +367,7 @@ double EstimateSelectivity(THD *thd, Item *condition,
   // If the item is a true constant, we can say immediately whether it passes
   // or filters all rows. (Actually, calling get_filtering_effect() below
   // would crash if used_tables() is zero, which it is for const items.)
-  if (condition->const_item()) {
+  if (condition->const_item()) {  // 如果 condition 是标量且为 false，则返回 0.0 ，如果为 true，则返回 1.0
     return (condition->val_int() != 0) ? 1.0 : 0.0;
   }
 
@@ -375,10 +375,10 @@ double EstimateSelectivity(THD *thd, Item *condition,
   // information or histograms to find a better selectivity estimate.
   // TODO(khatlen): Do the same for field <=> field?
   double selectivity_cap = 1.0;
-  if (is_function_of_type(condition, Item_func::EQ_FUNC)) {
+  if (is_function_of_type(condition, Item_func::EQ_FUNC)) { // 如果 condition 是 EQ_FUNC
     Item_func_eq *eq = down_cast<Item_func_eq *>(condition);
     if (eq->source_multiple_equality != nullptr &&
-        eq->source_multiple_equality->const_arg() == nullptr) {
+        eq->source_multiple_equality->const_arg() == nullptr) { // 如果 condition 来源 multiple_equality 且 没有常量，则把 condition 替换成 multiple_equality
       // To get consistent selectivities, we want all equalities that come from
       // the same multiple equality to use information from all of the tables.
       condition = eq->source_multiple_equality;

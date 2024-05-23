@@ -813,7 +813,7 @@ void warn_on_deprecated_user_defined_collation(
 %token<lexer.keyword> FORMAT_SYM 450
 %token<lexer.keyword> FOUND_SYM 451             /* SQL-2003-R */
 %token  FROM 452
-%token<lexer.keyword> FULL 453                  /* SQL-2003-R */
+%token  FULL 453                  /* SQL-2003-R */
 %token  FULLTEXT_SYM 454
 %token  FUNCTION_SYM 455                  /* SQL-2003-R */
 %token  GE 456
@@ -1477,7 +1477,7 @@ void warn_on_deprecated_user_defined_collation(
 %left UNION_SYM EXCEPT_SYM
 %left INTERSECT_SYM
 %left CONDITIONLESS_JOIN
-%left   JOIN_SYM INNER_SYM CROSS STRAIGHT_JOIN NATURAL LEFT RIGHT ON_SYM USING
+%left   JOIN_SYM INNER_SYM CROSS STRAIGHT_JOIN NATURAL FULL LEFT RIGHT ON_SYM USING
 %left   SET_VAR
 %left   OR_SYM OR2_SYM
 %left   XOR
@@ -12105,6 +12105,7 @@ natural_join_type:
           NATURAL opt_inner JOIN_SYM       { $$= JTT_NATURAL_INNER; }
         | NATURAL RIGHT opt_outer JOIN_SYM { $$= JTT_NATURAL_RIGHT; }
         | NATURAL LEFT opt_outer JOIN_SYM  { $$= JTT_NATURAL_LEFT; }
+        | NATURAL FULL opt_outer JOIN_SYM  { $$= JTT_NATURAL_FULL; }
         ;
 
 inner_join_type:
@@ -12116,6 +12117,7 @@ inner_join_type:
 outer_join_type:
           LEFT opt_outer JOIN_SYM          { $$= JTT_LEFT; }
         | RIGHT opt_outer JOIN_SYM         { $$= JTT_RIGHT; }
+        | FULL opt_outer JOIN_SYM          { $$= JTT_FULL; }
         ;
 
 opt_inner:
@@ -15667,13 +15669,6 @@ ident_keywords_unambiguous:
         | FOLLOWING_SYM
         | FORMAT_SYM
         | FOUND_SYM
-        | FULL
-          {
-            THD *thd= YYTHD;
-            push_warning_printf(thd, Sql_condition::SL_WARNING,
-                                ER_WARN_DEPRECATED_IDENT,
-                                ER_THD(thd, ER_WARN_DEPRECATED_IDENT), "FULL");
-          }
         | GENERAL
         | GENERATE_SYM
         | GEOMETRYCOLLECTION_SYM

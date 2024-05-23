@@ -195,7 +195,7 @@ std::string CompanionSetCollection::ToString() const {
   return stream.str();
 }
 
-CompanionSet *CompanionSetCollection::FindInternal(table_map tables) const {
+CompanionSet *CompanionSetCollection::FindInternal(table_map tables) const {  // 遍历 tables 查找 CompanionSetCollection::m_table_num_to_companion_set[i] 是否一致，如果一致则返回 CompanionSet
   assert(tables != 0);
 
   CompanionSet *ret = nullptr;

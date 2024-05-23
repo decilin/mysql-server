@@ -2607,13 +2607,13 @@ class Item : public Parse_tree_node {
 
   /** @see WalkItem, CompileItem, TransformItem */
   template <class T>
-  auto walk_helper_thunk(uchar *arg) {
+  auto walk_helper_thunk(uchar *arg) {  // walk_helper_thunk(uchar *arg) 把 (arg) 转换为 <std::remove_reference_t<T> *> 类型，然后把 thist 作为参数传给它执行
     return (*reinterpret_cast<std::remove_reference_t<T> *>(arg))(this);
   }
 
   /** See CompileItem */
   template <class T>
-  auto analyze_helper_thunk(uchar **arg) {
+  auto analyze_helper_thunk(uchar **arg) {  // analyze_helper_thunk(uchar **arg) 把 (*arg) 转换为 <std::remove_reference_t<T> *> 类型，然后把 thist 作为参数传给它执行
     return (*reinterpret_cast<std::remove_reference_t<T> *>(*arg))(this);
   }
 
@@ -2683,7 +2683,7 @@ class Item : public Parse_tree_node {
 
     @todo Pass THD to compile() function, thus no need to use current_thd.
   */
-  virtual Item *compile(Item_analyzer analyzer, uchar **arg_p,
+  virtual Item *compile(Item_analyzer analyzer, uchar **arg_p,  // 如果 ((this->*analyzer)(arg_p)) 为真则返回 this->*transformer)(arg_t)
                         Item_transformer transformer, uchar *arg_t) {
     if ((this->*analyzer)(arg_p)) return ((this->*transformer)(arg_t));
     return this;
@@ -3767,11 +3767,11 @@ inline bool WalkItem(const Item *item, enum_walk walk, T &&functor) {
      [](Item *item) { return item; });  // Transformer.
  */
 template <class T, class U>
-inline Item *CompileItem(Item *item, T &&analyzer, U &&transformer) {
+inline Item *CompileItem(Item *item, T &&analyzer, U &&transformer) {   // CompileItem(Item, [](Item *) { return true; }, [tables_in_subtree, is_filter](Item *item) -> Item * { ... }
   uchar *analyzer_ptr = reinterpret_cast<uchar *>(&analyzer);
-  return item->compile(&Item::analyze_helper_thunk<T>, &analyzer_ptr,
-                       &Item::walk_helper_thunk<U>,
-                       reinterpret_cast<uchar *>(&transformer));
+  return item->compile(&Item::analyze_helper_thunk<T>, &analyzer_ptr,  // analyze_helper_thunk(uchar **arg) 把 (*arg) 转换为 <std::remove_reference_t<T> *> 类型，然后把 thist 作为参数传给它执行
+                       &Item::walk_helper_thunk<U>,                    // walk_helper_thunk(uchar *arg)     把 (arg)  转换为 <std::remove_reference_t<T> *> 类型，然后把 thist 作为参数传给它执行
+                       reinterpret_cast<uchar *>(&transformer));  // 如果 ((this->*analyzer)(arg_p)) 为真则返回 this->*transformer)(arg_t)
 }
 
 /**

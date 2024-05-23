@@ -59,7 +59,7 @@ struct CachedPropertiesForPredicate {
 // required_nodes must also be present.
 //
 // See FindHyperedgeAndJoinConflicts() for details.
-struct ConflictRule {
+struct ConflictRule { // 给出一个 joins ，如果 needed_to_activate_rule 是 joins 的一部分，那么整个 required_nodes 都要在 joins 中
   hypergraph::NodeMap needed_to_activate_rule;
   hypergraph::NodeMap required_nodes;
 };
@@ -258,7 +258,7 @@ inline bool OperatorIsCommutative(const RelationalExpression &expr) {
 // Call the given functor on each non-table operator in the tree below expr,
 // including expr itself, in post-traversal order.
 template <class Func>
-void ForEachJoinOperator(RelationalExpression *expr, Func &&func) {
+void ForEachJoinOperator(RelationalExpression *expr, Func &&func) { // expr 下面的所有非表节点，执行 func
   if (expr->type == RelationalExpression::TABLE) {
     return;
   }
@@ -268,7 +268,7 @@ void ForEachJoinOperator(RelationalExpression *expr, Func &&func) {
 }
 
 template <class Func>
-void ForEachOperator(RelationalExpression *expr, Func &&func) {
+void ForEachOperator(RelationalExpression *expr, Func &&func) { // 遍历 RelationalExpression 的 expr->left、expr->right
   if (expr->type != RelationalExpression::TABLE) {
     ForEachOperator(expr->left, std::forward<Func &&>(func));
     ForEachOperator(expr->right, std::forward<Func &&>(func));
@@ -289,7 +289,7 @@ class CompanionSetCollection final {
 
   CompanionSet *Find(table_map tables) { return FindInternal(tables); }
 
-  const CompanionSet *Find(table_map tables) const {
+  const CompanionSet *Find(table_map tables) const {  // 遍历 tables 查找 CompanionSetCollection::m_table_num_to_companion_set[i] 是否一致，如果一致则返回 CompanionSet
     return FindInternal(tables);
   }
 

@@ -2847,7 +2847,7 @@ inline bool IsAnd(const Item *item) {
   returns true as soon as a call to "func" returns true.
  */
 template <class Func>
-bool WalkConjunction(Item *condition, Func func) {
+bool WalkConjunction(Item *condition, Func func) {  // 递归遍历 condition 中的每一个 AND 项，然后执行 func(condition)
   if (condition == nullptr) {
     return false;
   } else if (IsAnd(condition)) {

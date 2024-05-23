@@ -270,6 +270,8 @@ string JoinTypeToString(JoinType join_type) {
       return "antijoin";
     case JoinType::SEMI:
       return "semijoin";
+    case JoinType::FULL_OUTER:
+      return "full join";
     default:
       assert(false);
       return "<error>";

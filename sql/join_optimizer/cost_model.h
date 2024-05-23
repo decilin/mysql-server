@@ -220,6 +220,7 @@ inline double FindOutputRowsForJoin(double left_rows, double right_rows,
       return left_rows * right_rows * edge->selectivity;
 
     case RelationalExpression::FULL_OUTER_JOIN:   // Not implemented.
+      return left_rows * std::max(right_rows * edge->selectivity, 1.0) + left_rows * std::max(1.0 - EstimateSemijoinFanOut(right_rows, *edge), 0.1);
     case RelationalExpression::MULTI_INNER_JOIN:  // Should not appear here.
     case RelationalExpression::TABLE:             // Should not appear here.
       assert(false);

@@ -111,7 +111,7 @@ Item_func_eq *MakeEqItem(Item *a, Item *b,
   equalities will be split into one or more single equalities later, referencing
   no more than two tables each.
  */
-int CountTablesInEquiJoinCondition(const Item *cond) {
+int CountTablesInEquiJoinCondition(const Item *cond) {  // 计算 cond 使用多少张表，如果是 MultipleEquals 则返回2，因为 MultipleEquals 会在后续被拆分成 多个 single equalities
   assert(
       cond->type() == Item::FUNC_ITEM &&
       down_cast<const Item_func *>(cond)->contains_only_equi_join_condition());
@@ -147,7 +147,7 @@ int CountTablesInEquiJoinCondition(const Item *cond) {
    ones (like t1.x=t2.x+t3.x), so that we prefer making simple edges and avoid
    hyperedges when we can.
 */
-void ReorderConditions(Mem_root_array<Item *> *condition_parts) {
+void ReorderConditions(Mem_root_array<Item *> *condition_parts) { // 重排序 Mem_root_array<Item *> 数组。因为之前的 optimize_cond() 会导致 equalities 放在数组后面。我们最好把 equalities 调整到数组前面。 
   // First equijoin conditions, followed by other conditions, then
   // subqueries (which can be expensive), then stored procedures
   // (which are unknown, so potentially _very_ expensive).
@@ -181,7 +181,7 @@ void ReorderConditions(Mem_root_array<Item *> *condition_parts) {
  */
 void ExpandSameTableFromMultipleEquals(Item_equal *equal,
                                        table_map tables_in_subtree,
-                                       List<Item> *eq_items) {
+                                       List<Item> *eq_items) {  // 提取 MultipleEquals 中的多个字段的公共表，比如 equal(t1.a, t2.a, t2.b, t3.a) 会被转换成 t2.a=t2.b AND (original item)。这可以让我们后续把 t2.a=t2.b 下推
   // Look for pairs of items that touch the same table.
   for (auto it1 = equal->get_fields().begin(); it1 != equal->get_fields().end();
        ++it1) {
@@ -214,7 +214,7 @@ void ExpandSameTableFromMultipleEquals(Item_equal *equal,
 
   The return value is an AND conjunction, so most likely, it needs to be split.
  */
-Item *EarlyExpandMultipleEquals(Item *condition, table_map tables_in_subtree) {
+Item *EarlyExpandMultipleEquals(Item *condition, table_map tables_in_subtree) { // 在 join 下推前展开 multiple equalities，返回 AND conjunction。1、标量处理，2、常量处理（每个字段填充常量），3、涉及表个数大于2的处理（提取公共表），4、涉及表个数等于2的处理（获取 Item_func_eq）
   return CompileItem(
       condition, [](Item *) { return true; },
       [tables_in_subtree](Item *item) -> Item * {
@@ -233,21 +233,21 @@ Item *EarlyExpandMultipleEquals(Item *condition, table_map tables_in_subtree) {
         // to be "true", as that could happen only when const table
         // optimization is used (It is currently not done for
         // hypergraph).
-        if (equal->const_item() && !equal->val_int()) {
+        if (equal->const_item() && !equal->val_int()) { // 如果是标量
           eq_items.push_back(new Item_func_false);
-        } else if (equal->const_arg() != nullptr) {
+        } else if (equal->const_arg() != nullptr) { // 如果 equal 包含常量
           // If there is a constant element, do a simple expansion.
-          for (Item_field &field : equal->get_fields()) {
-            if (IsSubset(field.used_tables(), tables_in_subtree)) {
-              eq_items.push_back(MakeEqItem(&field, equal->const_arg(), equal));
+          for (Item_field &field : equal->get_fields()) { // 遍历 equal 的所有表字段
+            if (IsSubset(field.used_tables(), tables_in_subtree)) { // 如果该字段在 tables_in_subtree 中
+              eq_items.push_back(MakeEqItem(&field, equal->const_arg(), equal));  // 常量填充所有字段
             }
           }
-        } else if (popcount(equal->used_tables() & tables_in_subtree) > 2) {
+        } else if (popcount(equal->used_tables() & tables_in_subtree) > 2) {  // 如果 equal 中全是字段，且字段涉及的表个数大于 2
           // Only look at partial expansion.
-          ExpandSameTableFromMultipleEquals(equal, tables_in_subtree,
+          ExpandSameTableFromMultipleEquals(equal, tables_in_subtree,  // 提取 MultipleEquals 中的多个字段的公共表，比如 equal(t1.a, t2.a, t2.b, t3.a) 会被转换成 t2.a=t2.b AND (original item)。这可以让我们后续把 t2.a=t2.b 下推
                                             &eq_items);
           eq_items.push_back(equal);
-        } else {
+        } else {  // 如果 equal 中全是字段，且字段在 tables_in_subtree 中个数等于 2
           // Prioritize expanding equalities from the same table if possible;
           // e.g., if we have t1.a = t2.a = t2.b, we want to have t2.a = t2.b
           // included (ie., not t1.a = t2.a AND t1.a = t2.b). The primary reason
@@ -270,19 +270,19 @@ Item *EarlyExpandMultipleEquals(Item *condition, table_map tables_in_subtree) {
 
           table_map included_tables = 0;
           Item_field *base_item = nullptr;
-          for (Item_field &field : equal->get_fields()) {
+          for (Item_field &field : equal->get_fields()) {  // 如果 equal 中全是字段，且字段涉及的表个数等于 2
             assert(has_single_bit(field.used_tables()));
-            if (!IsSubset(field.used_tables(), tables_in_subtree) ||
+            if (!IsSubset(field.used_tables(), tables_in_subtree) ||  // 如果字段使用的表不在 tables_in_subtree 中 或者 跟之前已经处理过，则 continue
                 Overlaps(field.used_tables(), included_tables)) {
               continue;
             }
             included_tables |= field.used_tables();
-            if (base_item == nullptr) {
+            if (base_item == nullptr) { // 第一个 field 赋值给 base_item
               base_item = &field;
               continue;
             }
 
-            eq_items.push_back(MakeEqItem(base_item, &field, equal));
+            eq_items.push_back(MakeEqItem(base_item, &field, equal)); // 得到两张表的 Item_func_eq，退出循环
 
             // Since we have at most two tables, we can have only one link.
             break;
@@ -293,13 +293,13 @@ Item *EarlyExpandMultipleEquals(Item *condition, table_map tables_in_subtree) {
       });
 }
 
-RelationalExpression *MakeRelationalExpression(THD *thd, const Table_ref *tl) {
+RelationalExpression *MakeRelationalExpression(THD *thd, const Table_ref *tl) { // 根据 Table_ref 设置 type、table、tables_in_subtree，给 join_conditions_pushable_to_this 分配空间
   if (tl == nullptr) {
     // No tables.
     return nullptr;
   } else if (tl->nested_join == nullptr) {
     // A single table.
-    RelationalExpression *ret = new (thd->mem_root) RelationalExpression(thd);
+    RelationalExpression *ret = new (thd->mem_root) RelationalExpression(thd); 
     ret->type = RelationalExpression::TABLE;
     ret->table = tl;
     ret->tables_in_subtree = tl->map();
@@ -315,30 +315,33 @@ RelationalExpression *MakeRelationalExpression(THD *thd, const Table_ref *tl) {
   Convert the Query_block's join lists into a RelationalExpression,
   ie., a join tree with tables at the leaves.
  */
-RelationalExpression *MakeRelationalExpressionFromJoinList(
-    THD *thd, const mem_root_deque<Table_ref *> &join_list) {
+RelationalExpression *MakeRelationalExpressionFromJoinList(  // 后续遍历 join_list，1、如果是 sj 或者 aj，则递归 2、如果不是 sj 或者 aj，则直接生成 RelationalExpression 3、拿到优化后的 <Item *> Table_ref->m_join_cond_optim，如果是 multiple equalities，则 3.1、标量处理，3.2、常量处理（每个字段填充常量），3.3、涉及表个数大于2的处理（提取公共表），3.4、涉及表个数等于2的处理（获取 Item_func_eq）
+    THD *thd, const mem_root_deque<Table_ref *> &join_list) { // 递归遍历 join_cond 中的每个一 AND 项目，然后存放到 Mem_root_array<Item *> join->join_conditions 数组中，消除多余的过滤条件，重排序 Mem_root_array<Item *> 数组
   assert(!join_list.empty());
   RelationalExpression *ret = nullptr;
-  for (auto it = join_list.rbegin(); it != join_list.rend();
+  for (auto it = join_list.rbegin(); it != join_list.rend();  // 后续遍历 join_list
        ++it) {  // The list goes backwards.
     const Table_ref *tl = *it;
     if (ret == nullptr) {
       // The first table in the list.
-      ret = MakeRelationalExpression(thd, tl);
+      ret = MakeRelationalExpression(thd, tl); // 根据 Table_ref 设置 type、table、tables_in_subtree，给 join_conditions_pushable_to_this 分配空间。生成第一个 RelationalExpression
       continue;
     }
 
     RelationalExpression *join = new (thd->mem_root) RelationalExpression(thd);
     join->left = ret;
-    if (tl->is_sj_or_aj_nest()) {
+    if (tl->is_sj_or_aj_nest()) { // 如果是 sj 或者 aj，则递归执行 MakeRelationalExpressionFromJoinList(thd, tl->nested_join->m_tables)
       join->right =
           MakeRelationalExpressionFromJoinList(thd, tl->nested_join->m_tables);
       join->type = tl->is_sj_nest() ? RelationalExpression::SEMIJOIN
                                     : RelationalExpression::ANTIJOIN;
-    } else {
+    } else {  // 如果不是 sj 或者 aj，则直接生成 RelationalExpression
       join->right = MakeRelationalExpression(thd, tl);
       if (tl->outer_join) {
-        join->type = RelationalExpression::LEFT_JOIN;
+        if (tl->full_join) 
+          join->type = RelationalExpression::FULL_OUTER_JOIN;
+        else
+          join->type = RelationalExpression::LEFT_JOIN;
       } else if (tl->straight) {
         join->type = RelationalExpression::STRAIGHT_INNER_JOIN;
       } else {
@@ -351,13 +354,13 @@ RelationalExpression *MakeRelationalExpressionFromJoinList(
       assert(tl->join_cond_optim() != nullptr);
     }
     if (tl->join_cond_optim() != nullptr) {
-      Item *join_cond = EarlyExpandMultipleEquals(tl->join_cond_optim(),
-                                                  join->tables_in_subtree);
-      ExtractConditions(join_cond, &join->join_conditions);
+      Item *join_cond = EarlyExpandMultipleEquals(tl->join_cond_optim(),  // 拿到优化后的 <Item *> Table_ref->m_join_cond_optim
+                                                  join->tables_in_subtree); // 在 join 下推前展开 multiple equalities，返回 AND conjunction。1、标量处理，2、常量处理（每个字段填充常量），3、涉及表个数大于2的处理（提取公共表），4、涉及表个数等于2的处理（获取 Item_func_eq）
+      ExtractConditions(join_cond, &join->join_conditions); // 递归遍历 join_cond 中的每个一 AND 项目，然后存放到 Mem_root_array<Item *> join->join_conditions 数组中
       bool always_false = false;
-      EarlyNormalizeConditions(thd, join, &join->join_conditions,
+      EarlyNormalizeConditions(thd, join, &join->join_conditions, // 总体思想是：消除多余的过滤条件
                                &always_false);
-      ReorderConditions(&join->join_conditions);
+      ReorderConditions(&join->join_conditions); // 重排序 Mem_root_array<Item *> 数组。因为之前的 optimize_cond() 会导致 equalities 放在数组后面。我们最好把 equalities 调整到数组前面。 
     }
     ret = join;
   }
@@ -377,7 +380,7 @@ RelationalExpression *MakeRelationalExpressionFromJoinList(
   If you want full unflattening, call UnflattenInnerJoins(), which calls this
   function recursively.
  */
-void CreateInnerJoinFromChildList(
+void CreateInnerJoinFromChildList(  // 把 MULTIJOIN(a, b, c, ...) 转换成 a JOIN MULTIJOIN(b, c, ...)。个人理解是转换成 MULTIJOIN(b, c, ...) JOIN a
     Mem_root_array<RelationalExpression *> children,
     RelationalExpression *expr) {
   expr->type = RelationalExpression::INNER_JOIN;
@@ -429,7 +432,7 @@ void CreateInnerJoinFromChildList(
   could be combined further with other joins). This also means that there may
   be items in the companion set that are not part of the same multi-join.
  */
-void FlattenInnerJoins(RelationalExpression *expr) {
+void FlattenInnerJoins(RelationalExpression *expr) {  // 如果 RelationalExpression 符合转换成 MULTI_INNER_JOIN 要求，那么查看它左右孩子，如果也是 MULTI_INNER_JOIN，那么合并成一个更大的 MULTI_INNER_JOIN
   if (expr->type == RelationalExpression::MULTI_INNER_JOIN) {
     // Already flattened, but grandchildren might need re-flattening.
     for (RelationalExpression *child : expr->multi_children) {
@@ -472,7 +475,7 @@ void FlattenInnerJoins(RelationalExpression *expr) {
   The opposite of FlattenInnerJoins(); converts all flattened joins to
   a series of (right-deep) binary joins.
  */
-void UnflattenInnerJoins(RelationalExpression *expr) {
+void UnflattenInnerJoins(RelationalExpression *expr) {  // 把 RelationalExpression 展开成 右深二叉树
   if (expr->type == RelationalExpression::TABLE) {
     return;
   }
@@ -517,8 +520,8 @@ void UnflattenInnerJoins(RelationalExpression *expr) {
 
   See also CreateInnerJoinFromChildList().
  */
-RelationalExpression *PartiallyUnflattenJoinForCondition(
-    table_map used_tables, RelationalExpression *expr) {
+RelationalExpression *PartiallyUnflattenJoinForCondition( // 根据条件，把 MULTIJOIN 中相关的表撤离出来，比如：MULTIJOIN(t1, t2, t3, t4 LJ t5) 遇到条件 t2.x = t5.x，那么转换为 MULTIJOIN(t1, t3, t2 JOIN (t4 LJ t5))
+    table_map used_tables, RelationalExpression *expr) {  // 比如：MULTIJOIN(t1, t2, t3) 遇到条件  t1.x = t2.x + t3.x，那么转换成 t1 JOIN MULTIJOIN(t2, t3)
   Mem_root_array<RelationalExpression *> affected_children(
       current_thd->mem_root);
   for (RelationalExpression *child : expr->multi_children) {
@@ -627,7 +630,7 @@ string PrintRelationalExpression(RelationalExpression *expr, int level) {
 //
 // A typical example of a null-rejecting condition would be a simple equality,
 // e.g. t1.x = t2.x, which would reject NULLs on t1 and t2.
-bool IsNullRejecting(const RelationalExpression &expr, table_map tables) {
+bool IsNullRejecting(const RelationalExpression &expr, table_map tables) {  // 查看 RelationalExpression 的 join_conditions、equijoin_conditions 中的表跟 tables 是否有交集
   for (Item *cond : expr.join_conditions) {
     if (Overlaps(tables, cond->not_null_tables())) {
       return true;
@@ -641,7 +644,7 @@ bool IsNullRejecting(const RelationalExpression &expr, table_map tables) {
   return false;
 }
 
-bool IsInnerJoin(RelationalExpression::Type type) {
+bool IsInnerJoin(RelationalExpression::Type type) { // 查看 RelationalExpression::Type 是否属于 inner join
   return type == RelationalExpression::INNER_JOIN ||
          type == RelationalExpression::STRAIGHT_INNER_JOIN ||
          type == RelationalExpression::MULTI_INNER_JOIN;
@@ -705,7 +708,7 @@ bool IsInnerJoin(RelationalExpression::Type type) {
 // have to be J3 (degenerate). The same argument explains why we don't
 // need to worry about r-asscom, and semijoins are already l-asscom.
 bool OperatorsAreAssociative(const RelationalExpression &a,
-                             const RelationalExpression &b) {
+                             const RelationalExpression &b) { // 判断两个 RelationalExpression 之间是否满足结合律
   // Table 2 from [Moe13]; which operator pairs are associative.
 
   if ((a.type == RelationalExpression::LEFT_JOIN ||
@@ -747,7 +750,7 @@ bool OperatorsAreAssociative(const RelationalExpression &a,
 //
 // See comments on OperatorsAreAssociative().
 bool OperatorsAreLeftAsscom(const RelationalExpression &a,
-                            const RelationalExpression &b) {
+                            const RelationalExpression &b) { // 判断两个 RelationalExpression 之间是否满足左结合律
   // Associative and asscom implies commutativity, and since STRAIGHT_JOIN
   // is associative and we don't want it to be commutative, we can't make it
   // asscom. As an example, a user writing
@@ -794,7 +797,7 @@ bool OperatorsAreLeftAsscom(const RelationalExpression &a,
 // ie., the order of left-applying <a> and <b> don't matter.
 // Similar to OperatorsAreLeftAsscom().
 bool OperatorsAreRightAsscom(const RelationalExpression &a,
-                             const RelationalExpression &b) {
+                             const RelationalExpression &b) { // 判断两个 RelationalExpression 之间是否满足右结合律
   // Table 3 from [Moe13]; which operator pairs are r-asscom.
   // (Cartesian products and inner joins are treated the same.)
   if (a.type == RelationalExpression::FULL_OUTER_JOIN &&
@@ -818,7 +821,7 @@ enum class AssociativeRewritesAllowed { ANY, RIGHT_ONLY, LEFT_ONLY };
   NOTE: The map might be wider than expr.tables_in_subtree due to
   multiple equalities; you should normally just ignore those bits.
  */
-table_map UsedTablesForCondition(const RelationalExpression &expr) {
+table_map UsedTablesForCondition(const RelationalExpression &expr) {  // 返回 RelationalExpression->join_conditions 使用的 table_map
   assert(expr.equijoin_conditions
              .empty());  // MakeHashJoinConditions() has not run yet.
   table_map used_tables = 0;
@@ -836,14 +839,14 @@ table_map UsedTablesForCondition(const RelationalExpression &expr) {
   (A,B) JOIN (C,D), A is certain; either A=C or A=D has to be included
   no matter what.
  */
-table_map CertainlyUsedTablesForCondition(const RelationalExpression &expr) {
+table_map CertainlyUsedTablesForCondition(const RelationalExpression &expr) { // 遍历 expr.join_conditions，获取条件中使用的表。因为 multiple equalities 的 used_tables() 没有设置，所以需要特殊处理
   assert(expr.equijoin_conditions
              .empty());  // MakeHashJoinConditions() has not run yet.
   table_map used_tables = 0;
   for (Item *cond : expr.join_conditions) {
     table_map this_used_tables = cond->used_tables();
-    if (IsMultipleEquals(cond)) {
-      table_map left_bits = this_used_tables & GetVisibleTables(expr.left);
+    if (IsMultipleEquals(cond)) { // 如果 cond 是 multiple equalities，根据 left、right 的 RelationalExpression::type 来获取 used_tables
+      table_map left_bits = this_used_tables & GetVisibleTables(expr.left); // GetVisibleTables：SEMIJOIN、ANTIJOIN 返回左边 RelationalExpression 的 tables_in_subtree，其他返回 左右两边 RelationalExpression 的 tables_in_subtree
       table_map right_bits = this_used_tables & GetVisibleTables(expr.right);
       if (has_single_bit(left_bits)) {
         used_tables |= left_bits;
@@ -851,7 +854,7 @@ table_map CertainlyUsedTablesForCondition(const RelationalExpression &expr) {
       if (has_single_bit(right_bits)) {
         used_tables |= right_bits;
       }
-    } else {
+    } else {  // 如果 cond 非 multiple equalities，则使用 cond->used_tables()
       used_tables |= this_used_tables;
     }
   }
@@ -863,7 +866,7 @@ table_map CertainlyUsedTablesForCondition(const RelationalExpression &expr) {
   condition, instead of pushing the condition onto the given point in the
   join tree (which we have presumably found out that we don't want).
  */
-bool IsCandidateForCycle(RelationalExpression *expr, Item *cond,
+bool IsCandidateForCycle(RelationalExpression *expr, Item *cond,  // 检查 cond->used_tables() 是否在一个 CompanionSet 中
                          const CompanionSetCollection &companion_collection) {
   if (cond->type() != Item::FUNC_ITEM) {
     return false;
@@ -875,7 +878,7 @@ bool IsCandidateForCycle(RelationalExpression *expr, Item *cond,
   if (!IsMultipleEquals(func_item)) {
     // Don't try to make cycle edges out of hyperpredicates, at least for now;
     // simple equalities and multi-equalities only.
-    if (!func_item->contains_only_equi_join_condition()) {
+    if (!func_item->contains_only_equi_join_condition()) {  // 如果包含复合 item 则返回 false，只包含 equi-join conditions 才会返回 true。这用来决定是否使用 hash join 或者在 join 后要 filter
       return false;
     }
     if (popcount(cond->used_tables()) != 2) {
@@ -892,16 +895,16 @@ bool IsCandidateForCycle(RelationalExpression *expr, Item *cond,
   for (Item *other_cond : expr->join_conditions) {
     used_tables |= other_cond->used_tables();
   }
-  return companion_collection.Find(used_tables & expr->tables_in_subtree) !=
+  return companion_collection.Find(used_tables & expr->tables_in_subtree) !=  // 遍历 tables 查找 CompanionSetCollection::m_table_num_to_companion_set[i] 是否一致，如果一致则返回 CompanionSet
          nullptr;
 }
 
-bool ComesFromMultipleEquality(Item *item, Item_equal *equal) {
+bool ComesFromMultipleEquality(Item *item, Item_equal *equal) { // 判断 item 是否来自 Item_equal
   return is_function_of_type(item, Item_func::EQ_FUNC) &&
          down_cast<Item_func_eq *>(item)->source_multiple_equality == equal;
 }
 
-int FindSourceMultipleEquality(Item *item,
+int FindSourceMultipleEquality(Item *item,  // 查找 Item_func_eq 是从 Mem_root_array<Item_equal *> 数组中哪个元素产生，返回元素的坐标
                                const Mem_root_array<Item_equal *> &equals) {
   if (!is_function_of_type(item, Item_func::EQ_FUNC)) {
     return -1;
@@ -915,7 +918,7 @@ int FindSourceMultipleEquality(Item *item,
   return -1;
 }
 
-bool MultipleEqualityAlreadyExistsOnJoin(Item_equal *equal,
+bool MultipleEqualityAlreadyExistsOnJoin(Item_equal *equal, // 查看 RelationalExpression 的 join_conditions、equijoin_conditions，检查是否有 Item_eq_base 属于 Item_equal
                                          const RelationalExpression &expr) {
   // Could be called both before and after MakeHashJoinConditions(),
   // so check for join_conditions and equijoin_conditions.
@@ -932,7 +935,7 @@ bool MultipleEqualityAlreadyExistsOnJoin(Item_equal *equal,
   return false;
 }
 
-bool AlreadyExistsOnJoin(Item *cond, const RelationalExpression &expr) {
+bool AlreadyExistsOnJoin(Item *cond, const RelationalExpression &expr) {  // 查看 RelationalExpression 的 join_conditions 是否有 cond，或者有 cond->source_multiple_equality
   assert(expr.equijoin_conditions
              .empty());  // MakeHashJoinConditions() has not run yet.
   constexpr bool binary_cmp = true;
@@ -985,23 +988,23 @@ bool AlreadyExistsOnJoin(Item *cond, const RelationalExpression &expr) {
   get a dependency on both b and c, hindering (ab) and (ac) as subplans.
   This function allows us to detect this and look for other opportunities
   (see AddJoinCondition()).
- */
-bool IsBadJoinForCondition(const RelationalExpression &expr, Item *cond) {
-  const table_map used_tables = cond->used_tables();
+ */ 
+bool IsBadJoinForCondition(const RelationalExpression &expr, Item *cond) {  // 返回 true  的情况：1、cond->used_tables() 与 expr.left 或者 expr.right 不相交 2、cond 是 MultipleEquals，且在 expr 的 join_conditions、equijoin_conditions 中能找到该 MultipleEquals 3、cond->used_tables() 不是 CertainlyUsedTablesForCondition(expr) 的子集
+  const table_map used_tables = cond->used_tables();                        // 返回 false 的情况：1、CertainlyUsedTablesForCondition(expr) 的结果为 0 2、cond->used_tables() 与 CertainlyUsedTablesForCondition(expr) 的交集，与 expr 的 left、right 的 tables_in_subtree 都相交 3、cond->used_tables() 是 CertainlyUsedTablesForCondition(expr) 的子集
 
   // Making a degenerate join is rarely good.
-  if (!Overlaps(used_tables, expr.left->tables_in_subtree) ||
+  if (!Overlaps(used_tables, expr.left->tables_in_subtree) || // 如果 cond->used_tables() 与 expr.left 或者 expr.right 不相交，则返回 true
       !Overlaps(used_tables, expr.right->tables_in_subtree)) {
     return true;
   }
 
-  const table_map already_used_tables = CertainlyUsedTablesForCondition(expr);
+  const table_map already_used_tables = CertainlyUsedTablesForCondition(expr); // 遍历 expr.join_conditions，获取条件中使用的表。因为 multiple equalities 的 used_tables() 没有设置，所以需要特殊处理
   if (already_used_tables == 0) {
     // Making a Cartesian join into a proper join is good.
     return false;
   }
 
-  if (IsMultipleEquals(cond)) {
+  if (IsMultipleEquals(cond)) { // 如果 cond 是 MultipleEquals，且 RelationalExpression 也有
     // Don't apply the same multi-equality twice on the same join. This fixes an
     // issue that goes roughly like this:
     //
@@ -1024,7 +1027,7 @@ bool IsBadJoinForCondition(const RelationalExpression &expr, Item *cond) {
     //
     // See the unit test MultipleEqualityIsNotPushedMultipleTimes for an example
     // that goes horribly wrong without this.
-    if (MultipleEqualityAlreadyExistsOnJoin(down_cast<Item_equal *>(cond),
+    if (MultipleEqualityAlreadyExistsOnJoin(down_cast<Item_equal *>(cond), // 查看 RelationalExpression 的 join_conditions、equijoin_conditions，检查是否有 Item_eq_base 属于 Item_equal
                                             expr)) {
       return true;
     }
@@ -1054,7 +1057,7 @@ bool IsBadJoinForCondition(const RelationalExpression &expr, Item *cond) {
 
   Does not check that the transformation is actually legal.
  */
-void RotateRight(RelationalExpression *op) {
+void RotateRight(RelationalExpression *op) {  // 旋转关系树
   RelationalExpression *op2 = op->right;
   RelationalExpression *b = op2->left;
   RelationalExpression *c = op2->right;
@@ -1080,7 +1083,7 @@ void RotateRight(RelationalExpression *op) {
 
   See RotateRight for details.
  */
-void RotateLeft(RelationalExpression *op) {
+void RotateLeft(RelationalExpression *op) {  // 旋转关系树
   RelationalExpression *op2 = op->left;
   RelationalExpression *a = op2->left;
   RelationalExpression *b = op2->right;
@@ -1105,9 +1108,9 @@ void RotateLeft(RelationalExpression *op) {
   and given the multi-equality (A.x,B.x,D.x), it may pick A.x = D.x
   or B.x = D.x (but never A.x = B.x).
  */
-Item_func_eq *ConcretizeMultipleEquals(Item_equal *cond,
+Item_func_eq *ConcretizeMultipleEquals(Item_equal *cond,  // 先到 GetVisibleTables(expr.left 或 right) 查找 item_field.used_tables() 是否能形成边，如果没有则到  expr.left->tables_in_subtree 中查找。最后返回  <Item_func_eq>MakeEqItem(left, right, cond)
                                        const RelationalExpression &expr) {
-  const table_map already_used_tables = CertainlyUsedTablesForCondition(expr);
+  const table_map already_used_tables = CertainlyUsedTablesForCondition(expr);  // 遍历 expr.join_conditions，获取条件中使用的表。因为 multiple equalities 的 used_tables() 没有设置，所以需要特殊处理
 
   Item_field *left = nullptr;
   Item_field *right = nullptr;
@@ -1120,7 +1123,7 @@ Item_func_eq *ConcretizeMultipleEquals(Item_equal *cond,
   // It is correct indeed and also that HeatWave does not support
   // seeing inner tables of a semijoin from outside the semijoin.
   for (Item_field &item_field : cond->get_fields()) {
-    if (Overlaps(item_field.used_tables(), GetVisibleTables(expr.left))) {
+    if (Overlaps(item_field.used_tables(), GetVisibleTables(expr.left))) {  // SEMIJOIN、ANTIJOIN 返回左边 RelationalExpression 的 tables_in_subtree，其他返回 左右两边 RelationalExpression 的 tables_in_subtree
       if (left == nullptr ||
           !Overlaps(left->used_tables(), already_used_tables)) {
         left = &item_field;
@@ -1170,7 +1173,7 @@ Item_func_eq *ConcretizeMultipleEquals(Item_equal *cond,
   The given container must support push_back(Item_func_eq *).
  */
 template <class T>
-static void FullyConcretizeMultipleEquals(Item_equal *cond,
+static void FullyConcretizeMultipleEquals(Item_equal *cond, // 把 (A.x, B.x, D.x, E.x)、allowed_tables={A,B,C,D} 转换成  A.x = B.x and B.x = D.x (E.x is ignored).
                                           table_map allowed_tables, T *result) {
   Item_field *last_field = nullptr;
   table_map seen_tables = 0;
@@ -1199,8 +1202,8 @@ static void FullyConcretizeMultipleEquals(Item_equal *cond,
   since we might plan two times, and the caches from the first time may confuse
   remove_eq_cond() in the second.
  */
-Item *CanonicalizeCondition(Item *condition, table_map visible_tables,
-                            table_map all_tables) {
+Item *CanonicalizeCondition(Item *condition, table_map visible_tables, // 把 (A.x, B.x, D.x, E.x)、allowed_tables={A,B,C,D} 转换成  A.x = B.x and B.x = D.x (E.x is ignored).
+                            table_map all_tables) { // 
   // Convert any remaining (unpushed) multiple equals to a series of equijoins.
   // Note this is a last-ditch resort, and should almost never happen;
   // thus, it's fine just to fully expand the multi-equality, even though it
@@ -1216,7 +1219,7 @@ Item *CanonicalizeCondition(Item *condition, table_map visible_tables,
         Item_equal *equal = down_cast<Item_equal *>(item);
         assert(equal->const_arg() == nullptr);
         List<Item> eq_items;
-        FullyConcretizeMultipleEquals(equal, visible_tables, &eq_items);
+        FullyConcretizeMultipleEquals(equal, visible_tables, &eq_items); // 把 (A.x, B.x, D.x, E.x) 转换成  A.x = B.x and B.x = D.x (E.x is ignored).
         if (eq_items.is_empty()) {
           // It is possible that for some semijoin conditions, we might
           // not find replacements in only visible tables. So we try again
@@ -1234,17 +1237,17 @@ Item *CanonicalizeCondition(Item *condition, table_map visible_tables,
 
 // Split any conditions that have been transformed into a conjunction (typically
 // by expansion of multiple equalities or removal of constant subconditions).
-Mem_root_array<Item *> ResplitConditions(
+Mem_root_array<Item *> ResplitConditions( // 例子：把 A.x = B.x and B.x = D.x 这样的条件转换成 Mem_root_array<Item *> 数组，里面包含两个元素 A.x = B.x 和 B.x = D.x
     THD *thd, const Mem_root_array<Item *> &conditions) {
   Mem_root_array<Item *> new_conditions(thd->mem_root);
   for (Item *condition : conditions) {
-    ExtractConditions(condition, &new_conditions);
+    ExtractConditions(condition, &new_conditions); // 递归遍历 condition 中的每个一 AND 项目，然后存放到 condition_parts 数组中
   }
   return new_conditions;
 }
 
 // Calls CanonicalizeCondition() for each condition in the given array.
-bool CanonicalizeConditions(THD *thd, table_map visible_tables,
+bool CanonicalizeConditions(THD *thd, table_map visible_tables, // 规范化 Conditions：把 (A.x, B.x, D.x, E.x)、allowed_tables={A,B,C,D} 转换成  A.x = B.x and B.x = D.x (E.x is ignored). 然后重新拆分 conditions 成新的数组，比如前面的例子拆成 A.x = B.x 和 B.x = D.x
                             table_map all_tables,
                             Mem_root_array<Item *> *conditions) {
   bool need_resplit = false;
@@ -1260,7 +1263,7 @@ bool CanonicalizeConditions(THD *thd, table_map visible_tables,
     }
   }
   if (need_resplit) {
-    *conditions = ResplitConditions(thd, *conditions);
+    *conditions = ResplitConditions(thd, *conditions); // 例子：把 A.x = B.x and B.x = D.x 这样的条件转换成 Mem_root_array<Item *> 数组，里面包含两个元素 A.x = B.x 和 B.x = D.x
   }
   return false;
 }
@@ -1289,7 +1292,7 @@ bool CanonicalizeConditions(THD *thd, table_map visible_tables,
   This function works recursively, and returns true if the condition
   was pushed.
  */
-bool AddJoinConditionPossiblyWithRewrite(RelationalExpression *expr, Item *cond,
+bool AddJoinConditionPossiblyWithRewrite(RelationalExpression *expr, Item *cond,  // 旋转 RelationalExpression，找到合适的 expr，然后尝试把 Item *cond 添加进 expr->join_conditions
                                          AssociativeRewritesAllowed allowed,
                                          bool used_commutativity,
                                          bool *need_flatten, string *trace) {
@@ -1302,12 +1305,12 @@ bool AddJoinConditionPossiblyWithRewrite(RelationalExpression *expr, Item *cond,
   // semijoins, but having a left join doesn't stop us from doing the rewrites
   // below. Due to special semijoin rules in MySQL (see comments in
   // PushDownCondition()), we also disallow making join conditions on semijoins.
-  if (!IsBadJoinForCondition(*expr, cond) && IsInnerJoin(expr->type)) {
+  if (!IsBadJoinForCondition(*expr, cond) && IsInnerJoin(expr->type)) {  // IsBadJoinForCondition 的介绍：返回 true  的情况：1、cond->used_tables() 与 expr.left 或者 expr.right 不相交 2、cond 是 MultipleEquals，且在 expr 的 join_conditions、equijoin_conditions 中能找到该 MultipleEquals 3、cond->used_tables() 不是 CertainlyUsedTablesForCondition(expr) 的子集
     if (IsMultipleEquals(cond)) {
-      cond = ConcretizeMultipleEquals(down_cast<Item_equal *>(cond), *expr);
+      cond = ConcretizeMultipleEquals(down_cast<Item_equal *>(cond), *expr);  // 先到 GetVisibleTables(expr.left 或 right) 查找 item_field.used_tables() 是否能形成边，如果没有则到  expr.left->tables_in_subtree 中查找。最后返回  <Item_func_eq>MakeEqItem(left, right, cond)
     }
 
-    expr->join_conditions.push_back(cond);
+    expr->join_conditions.push_back(cond);  // 如果不是 bad join condition，则找出对应的边，然后把 <Item_func_eq>cond 放进 expr->join_conditions，然后返回
     if (trace != nullptr && allowed != AssociativeRewritesAllowed::ANY) {
       *trace += StringPrintf(
           "- applied associativity%s to better push condition %s\n",
@@ -1324,7 +1327,7 @@ bool AddJoinConditionPossiblyWithRewrite(RelationalExpression *expr, Item *cond,
   //
   // NOTE: When/if we support rotating through flattened joins, we can
   // drop all the commutativity code.
-  UnflattenInnerJoins(expr);
+  UnflattenInnerJoins(expr);  // 把 RelationalExpression 展开成 右深二叉树
   *need_flatten = true;
 
   // Try (where ABC are arbitrary expressions, and <op1> is expr):
@@ -1340,7 +1343,7 @@ bool AddJoinConditionPossiblyWithRewrite(RelationalExpression *expr, Item *cond,
     // (UsedTablesForCondition() instead of CertainlyUsedTablesForCondition()),
     // in order not to do possibly illegal rewrites. (It should only matter
     // for the rare case where we have unpushed multiple equalities.)
-    if (!Overlaps(UsedTablesForCondition(*expr),
+    if (!Overlaps(UsedTablesForCondition(*expr),  // 返回 RelationalExpression->join_conditions 使用的 table_map
                   expr->right->right->tables_in_subtree)) {
       RotateRight(expr);
       if (AddJoinConditionPossiblyWithRewrite(
@@ -1466,13 +1469,13 @@ bool AddJoinConditionPossiblyWithRewrite(RelationalExpression *expr, Item *cond,
   (e.g., because it hit an outer join), we will resolve it at the latest
   in CanonicalizeCondition().
  */
-void PushDownCondition(Item *cond, RelationalExpression *expr,
+void PushDownCondition(Item *cond, RelationalExpression *expr,  // 尽量把 cond 下推到 RelationalExpression 树的底层，区分整体下推、局部下推，特殊处理 MultipleEquals
                        bool is_join_condition_for_expr,
                        const CompanionSetCollection &companion_collection,
                        Mem_root_array<Item *> *table_filters,
                        Mem_root_array<Item *> *cycle_inducing_edges,
                        Mem_root_array<Item *> *remaining_parts, string *trace) {
-  if (expr->type == RelationalExpression::TABLE) {
+  if (expr->type == RelationalExpression::TABLE) {  // 如果 expr 是表，直接把 cond 放到 table_filters 数组中，然后返回
     assert(!IsMultipleEquals(cond));
     table_filters->push_back(cond);
     return;
@@ -1488,10 +1491,10 @@ void PushDownCondition(Item *cond, RelationalExpression *expr,
   assert(IsMultipleEquals(cond) ||
          IsSubset(cond->used_tables() & ~PSEUDO_TABLE_BITS,
                   expr->tables_in_subtree));
-  const table_map used_tables =
+  const table_map used_tables = // cond->used_tables() 和 expr->tables_in_subtree 的交集
       cond->used_tables() & (expr->tables_in_subtree | RAND_TABLE_BIT);
 
-  if (expr->type == RelationalExpression::MULTI_INNER_JOIN) {
+  if (expr->type == RelationalExpression::MULTI_INNER_JOIN) { // 如果是 MULTI_INNER_JOIN，遍历  expr->multi_children，如果 used_tables 是 迭代器的 tables_in_subtree 的子集，则递归（继续下推）、返回
     // See if we can push this condition down to a single child.
     for (RelationalExpression *child : expr->multi_children) {
       if (IsSubset(used_tables, child->tables_in_subtree)) {
@@ -1504,8 +1507,8 @@ void PushDownCondition(Item *cond, RelationalExpression *expr,
     }
 
     // We couldn't, so we'll need to unflatten the join (either partially
-    // or completely) to get a place where we can store the condition.
-    expr = PartiallyUnflattenJoinForCondition(used_tables, expr);
+    // or completely) to get a place where we can store the condition.  // cond 不能下推，所以我们需要 unflatten the join
+    expr = PartiallyUnflattenJoinForCondition(used_tables, expr); // 根据条件，把 MULTIJOIN 中相关的表撤离出来，比如：MULTIJOIN(t1, t2, t3, t4 LJ t5) 遇到条件 t2.x = t5.x，那么转换为 MULTIJOIN(t1, t3, t2 JOIN (t4 LJ t5))
 
     // Fall through, presumably storing the condition as a join condition
     // on the given node.
@@ -1523,11 +1526,11 @@ void PushDownCondition(Item *cond, RelationalExpression *expr,
   // antijoins, since that would remove rows that should otherwise
   // be output (as NULL-complemented ones in the case if outer joins).
   const bool can_push_into_left =
-      (IsInnerJoin(expr->type) ||
+      (IsInnerJoin(expr->type) || // 把 cond 下推到  expr->left 的必要条件：INNER_JOIN、STRAIGHT_INNER_JOIN、MULTI_INNER_JOIN、SEMIJOIN，
        expr->type == RelationalExpression::SEMIJOIN ||
        !is_join_condition_for_expr);
-  if (IsSubset(used_tables, expr->left->tables_in_subtree)) {
-    if (!can_push_into_left) {
+  if (IsSubset(used_tables, expr->left->tables_in_subtree)) { // 如果 used_tables 是 expr->left->tables_in_subtree 的子集，则可以把整个 cond 下推，否则只能局部下推
+    if (!can_push_into_left) {  // 如果 cond 不能下推，则放到 remaining_parts 中，然后返回
       if (remaining_parts != nullptr) {
         remaining_parts->push_back(cond);
       }
@@ -1575,9 +1578,9 @@ void PushDownCondition(Item *cond, RelationalExpression *expr,
   // filter that must either stay after this join, or it can be promoted
   // to a join condition for it.
 
-  if (AlreadyExistsOnJoin(cond, *expr) &&
+  if (AlreadyExistsOnJoin(cond, *expr) &&  // 查看 RelationalExpression 的 join_conditions 是否有 cond，或者有 cond->source_multiple_equality
       !(expr->type == RelationalExpression::LEFT_JOIN ||
-        expr->type == RelationalExpression::ANTIJOIN)) {
+        expr->type == RelationalExpression::ANTIJOIN)) {  // 如果 expr 已经有该条件，且 expr 不是 LEFT_JOIN 也不是 ANTIJOIN，那么不需要下推，直接返回
     // Redundant, so we can just forget about it.
     // (WHERE conditions are not pushable to outer joins or antijoins,
     // and thus not redundant, because post-join filters are not equivalent to
@@ -1591,10 +1594,10 @@ void PushDownCondition(Item *cond, RelationalExpression *expr,
   // Try partial pushdown into the left side (see function comment).
   if (can_push_into_left &&
       Overlaps(used_tables, expr->left->tables_in_subtree)) {
-    Item *partial_cond = make_cond_for_table(
+    Item *partial_cond = make_cond_for_table( // 如果 used_table 涉及的表是 T1，大体是把 (T1.a = 1 and T2.b = 2) or (T1.a = 3 and T2.b = 4) 转换成 T1.a = 1 or T1.a = 3
         current_thd, cond, expr->left->tables_in_subtree, /*used_table=*/0,
         /*exclude_expensive_cond=*/true);
-    if (partial_cond != nullptr) {
+    if (partial_cond != nullptr) {  // cond 局部下推
       PushDownCondition(partial_cond, expr->left,
                         /*is_join_condition_for_expr=*/false,
                         companion_collection, table_filters,
@@ -1646,14 +1649,14 @@ void PushDownCondition(Item *cond, RelationalExpression *expr,
     }
   }
 
-  // Now that any partial pushdown has been done, see if we can promote
+  // Now that any partial pushdown has been done, see if we can promote // 到此，所有的局部下推工作已经完成，然后探索是否可以把原过滤器改造成 join condition
   // the original filter to a join condition.
   if (is_join_condition_for_expr) {
     // We were already a join condition on this join, so there's nothing to do.
     // (We leave any multiple equalities for LateConcretizeMultipleEqualities();
     // see comments there. We should also not push them further, unlike WHERE
     // conditions that induce inner joins.)
-    if (remaining_parts != nullptr) {
+    if (remaining_parts != nullptr) { // 如果 cond 是 join condition，不能下推时，把 cond 放进 remaining_parts，返回
       remaining_parts->push_back(cond);
     }
     return;
@@ -1661,12 +1664,12 @@ void PushDownCondition(Item *cond, RelationalExpression *expr,
 
   // We cannot promote filters to join conditions for outer joins
   // and antijoins, but we can on inner joins and semijoins.
-  if (expr->type == RelationalExpression::LEFT_JOIN ||
+  if (expr->type == RelationalExpression::LEFT_JOIN ||  // 过滤器改造成 join condition 的前提是 inner joins 和 semijoins
       expr->type == RelationalExpression::ANTIJOIN) {
     // See if we can promote it by rewriting; if not, it has to be left
     // as a filter.
     bool need_flatten = false;
-    if (!AddJoinConditionPossiblyWithRewrite(
+    if (!AddJoinConditionPossiblyWithRewrite(  // 旋转 RelationalExpression，找到合适的 expr，然后尝试把 Item *cond 添加进 expr->join_conditions
             expr, cond, AssociativeRewritesAllowed::ANY,
             /*used_commutativity=*/false, &need_flatten, trace)) {
       if (remaining_parts != nullptr) {
@@ -1674,7 +1677,7 @@ void PushDownCondition(Item *cond, RelationalExpression *expr,
       }
     }
     if (need_flatten) {
-      FlattenInnerJoins(expr);
+      FlattenInnerJoins(expr);  // 如果 RelationalExpression 符合转换成 MULTI_INNER_JOIN 要求，那么查看它左右孩子，如果也是 MULTI_INNER_JOIN，那么合并成一个更大的 MULTI_INNER_JOIN
     }
     return;
   }
@@ -1701,7 +1704,7 @@ void PushDownCondition(Item *cond, RelationalExpression *expr,
           expr, cond, AssociativeRewritesAllowed::ANY,
           /*used_commutativity=*/false, &need_flatten, trace)) {
     if (expr->type == RelationalExpression::INNER_JOIN &&
-        IsCandidateForCycle(expr, cond, companion_collection)) {
+        IsCandidateForCycle(expr, cond, companion_collection)) {  // 检查 cond->used_tables() 是否在一个 CompanionSet 中
       // We couldn't push the condition to this join without broadening its
       // hyperedge, but we could add a simple edge (or multiple simple edges,
       // in the case of multiple equalities -- we defer the meshing of those
@@ -1716,7 +1719,7 @@ void PushDownCondition(Item *cond, RelationalExpression *expr,
               ItemToString(cond).c_str());
         }
         Mem_root_array<Item *> possible_cycle_edges(current_thd->mem_root);
-        FullyConcretizeMultipleEquals(down_cast<Item_equal *>(cond),
+        FullyConcretizeMultipleEquals(down_cast<Item_equal *>(cond), // 把 (A.x, B.x, D.x, E.x)、allowed_tables={A,B,C,D} 转换成  A.x = B.x and B.x = D.x (E.x is ignored)
                                       expr->tables_in_subtree,
                                       &possible_cycle_edges);
         for (Item *sub_cond : possible_cycle_edges) {
@@ -1730,7 +1733,7 @@ void PushDownCondition(Item *cond, RelationalExpression *expr,
           *trace += StringPrintf("- condition %s induces a hypergraph cycle\n",
                                  ItemToString(cond).c_str());
         }
-        cycle_inducing_edges->push_back(CanonicalizeCondition(
+        cycle_inducing_edges->push_back(CanonicalizeCondition( // 把 (A.x, B.x, D.x, E.x)、allowed_tables={A,B,C,D} 转换成  A.x = B.x and B.x = D.x (E.x is ignored)
             cond, expr->tables_in_subtree, expr->tables_in_subtree));
       }
       if (need_flatten) {
@@ -1748,7 +1751,7 @@ void PushDownCondition(Item *cond, RelationalExpression *expr,
     if (IsMultipleEquals(cond) && !MultipleEqualityAlreadyExistsOnJoin(
                                       down_cast<Item_equal *>(cond), *expr)) {
       expr->join_conditions.push_back(
-          ConcretizeMultipleEquals(down_cast<Item_equal *>(cond), *expr));
+          ConcretizeMultipleEquals(down_cast<Item_equal *>(cond), *expr));  // 先到 GetVisibleTables(expr.left 或 right) 查找 item_field.used_tables() 是否能形成边，如果没有则到  expr.left->tables_in_subtree 中查找。最后返回  <Item_func_eq>MakeEqItem(left, right, cond)
     } else if (IsSubset(used_tables, expr->tables_in_subtree)) {
       expr->join_conditions.push_back(cond);
     } else {
@@ -1776,8 +1779,8 @@ void PushDownCondition(Item *cond, RelationalExpression *expr,
   to signal that it should be investigated when we consider the table during
   join optimization.
  */
-void PushDownToSargableCondition(Item *cond, RelationalExpression *expr,
-                                 bool is_join_condition_for_expr) {
+void PushDownToSargableCondition(Item *cond, RelationalExpression *expr,  // 尝试下推条件（类似 PushDownCondition()）放到 expr->join_conditions_pushable_to_this，但目的是将连接条件推下到表上的可搜索条件。 如：等连接条件通常可以被推入索引；例如，t1.x = t2.x可以被推入到t1.x的索引中。当我们将这样的条件全部推到t1/t2连接上时，我们显然已经完成了常规推送（在PushDownCondition()中）
+                                 bool is_join_condition_for_expr) {       // 但在这里，如果可能的话，我们会将条件推到两边。 （例如：如果连接是左连接，我们可以将其推到t2，但不能推到t1。）当我们在这样的推送中碰到一个表时，我们将条件存储在“join_conditions_pushable_to_this”中，以表示该表应在我们考虑表时进行调查 连接优化。
   if (expr->type == RelationalExpression::TABLE) {
     // We don't try to make sargable join predicates out of subqueries;
     // it is quite marginal, and our machinery for dealing with materializing
@@ -1831,7 +1834,7 @@ void PushDownToSargableCondition(Item *cond, RelationalExpression *expr,
   returned as remaining if “expr” is indeed their final lowest place
   in the tree (otherwise, they might get lost).
  */
-Mem_root_array<Item *> PushDownAsMuchAsPossible(
+Mem_root_array<Item *> PushDownAsMuchAsPossible(  // 遍历 conditions 数组，尽可能地把迭代器下推
     THD *thd, Mem_root_array<Item *> conditions, RelationalExpression *expr,
     bool is_join_condition_for_expr,
     const CompanionSetCollection &companion_collection,
@@ -1887,7 +1890,7 @@ Mem_root_array<Item *> PushDownAsMuchAsPossible(
   the WHERE. When this function is called on the said join, it will push the
   join condition down again.
  */
-void PushDownJoinConditions(THD *thd, RelationalExpression *expr,
+void PushDownJoinConditions(THD *thd, RelationalExpression *expr, // 把整个 expr->join_conditions 下推，递归 expr->left、expr->right 或者 expr->multi_children
                             const CompanionSetCollection &companion_collection,
                             Mem_root_array<Item *> *table_filters,
                             Mem_root_array<Item *> *cycle_inducing_edges,
@@ -1926,7 +1929,7 @@ void PushDownJoinConditions(THD *thd, RelationalExpression *expr,
   multiple targets and generally are more complicated. It is much simpler
   to wait until they are concretized.)
  */
-void PushDownJoinConditionsForSargable(THD *thd, RelationalExpression *expr) {
+void PushDownJoinConditionsForSargable(THD *thd, RelationalExpression *expr) { // 遍历  expr->join_conditions，尝试下推条件（类似 PushDownCondition()）放到 expr->join_conditions_pushable_to_this。然后递归 expr->left、expr->right
   if (expr->type == RelationalExpression::TABLE) {
     return;
   }
@@ -1938,7 +1941,7 @@ void PushDownJoinConditionsForSargable(THD *thd, RelationalExpression *expr) {
     // outside the subtree.
     if (const table_map tables = item->used_tables() & ~PSEUDO_TABLE_BITS;
         popcount(tables) >= 2 && IsSubset(tables, expr->tables_in_subtree)) {
-      PushDownToSargableCondition(item, expr,
+      PushDownToSargableCondition(item, expr, // 尝试下推条件（类似 PushDownCondition()）放到 expr->join_conditions_pushable_to_this
                                   /*is_join_condition_for_expr=*/true);
     }
   }
@@ -1964,7 +1967,7 @@ void PushDownJoinConditionsForSargable(THD *thd, RelationalExpression *expr) {
   degenerate or within more complex expressions; CanonicalizeJoinConditions()
   will deal with them.
  */
-void LateConcretizeMultipleEqualities(THD *thd, RelationalExpression *expr) {
+void LateConcretizeMultipleEqualities(THD *thd, RelationalExpression *expr) { // 从 MultipleEqualities 找到一条边连接 expr->left、expr->right
   if (expr->type == RelationalExpression::TABLE) {
     return;
   }
@@ -1975,7 +1978,7 @@ void LateConcretizeMultipleEqualities(THD *thd, RelationalExpression *expr) {
     if (IsMultipleEquals(item) &&
         Overlaps(item->used_tables(), expr->left->tables_in_subtree) &&
         Overlaps(item->used_tables(), expr->right->tables_in_subtree)) {
-      item = ConcretizeMultipleEquals(down_cast<Item_equal *>(item), *expr);
+      item = ConcretizeMultipleEquals(down_cast<Item_equal *>(item), *expr); // 先到 GetVisibleTables(expr.left 或 right) 查找 item_field.used_tables() 是否能形成边，如果没有则到  expr.left->tables_in_subtree 中查找。最后返回  <Item_func_eq>MakeEqItem(left, right, cond)
     }
   }
   LateConcretizeMultipleEqualities(thd, expr->left);
@@ -1983,7 +1986,7 @@ void LateConcretizeMultipleEqualities(THD *thd, RelationalExpression *expr) {
 }
 
 // Find tables that are guaranteed to either return zero or only NULL rows.
-table_map FindNullGuaranteedTables(const RelationalExpression *expr) {
+table_map FindNullGuaranteedTables(const RelationalExpression *expr) {  // 找到那些保证只返回零行或者只返回 NULL 行的表
   if (expr->type == RelationalExpression::TABLE) {
     return 0;
   }
@@ -2011,7 +2014,7 @@ table_map FindNullGuaranteedTables(const RelationalExpression *expr) {
 // all rows, clear the equijoins (which we know is safe from side effects).
 // Also propagate this property up the tree wherever we have other equijoins
 // referring to the now-pruned tables.
-void ClearImpossibleJoinConditions(RelationalExpression *expr) {
+void ClearImpossibleJoinConditions(RelationalExpression *expr) {  // 遍历 expr->equijoin_conditions，如果发现它涉及的表只返回零行或者只返回 NULL 行，那么清空 expr->equijoin_conditions。继续递归 expr->left 和 expr->right
   if (expr->type == RelationalExpression::TABLE) {
     return;
   }
@@ -2026,15 +2029,15 @@ void ClearImpossibleJoinConditions(RelationalExpression *expr) {
   // do in CreateHashJoinAccessPath() in the old executor; see the code there
   // for some more comments.
   if (!expr->join_conditions_reject_all_rows) {
-    const table_map pruned_tables = FindNullGuaranteedTables(expr);
-    for (Item *item : expr->equijoin_conditions) {
-      if (Overlaps(item->not_null_tables(), pruned_tables)) {
-        expr->join_conditions_reject_all_rows = true;
+    const table_map pruned_tables = FindNullGuaranteedTables(expr);  // 找到那些保证只返回零行或者只返回 NULL 行的表
+    for (Item *item : expr->equijoin_conditions) {  // 遍历 expr->equijoin_conditions
+      if (Overlaps(item->not_null_tables(), pruned_tables)) {  // 如果只返回零行或者只返回 NULL 行的表跟 item 的表相交
+        expr->join_conditions_reject_all_rows = true; // RelationalExpression 的 join_conditions_reject_all_rows 设置为 true
         break;
       }
     }
   }
-  if (expr->join_conditions_reject_all_rows) {
+  if (expr->join_conditions_reject_all_rows) {  // 清空 expr->equijoin_conditions
     expr->equijoin_conditions.clear();
   }
   ClearImpossibleJoinConditions(expr->left);
@@ -2050,13 +2053,13 @@ void ClearImpossibleJoinConditions(RelationalExpression *expr) {
   on the right side (and thus not part of the same companion set); if so, we
   could have created a mesh of the three first ones, but we don't currently.
  */
-bool ShouldCompleteMeshForCondition(
+bool ShouldCompleteMeshForCondition(  // 如果 item_equal->used_tables() 找不到一致的 CompanionSetCollection::m_table_num_to_companion_set，或者 item_equal 有常量，则返回 false，其它情况返回 true
     Item_equal *item_equal,
     const CompanionSetCollection &companion_collection) {
-  if (companion_collection.Find(item_equal->used_tables()) == nullptr) {
+  if (companion_collection.Find(item_equal->used_tables()) == nullptr) {  // 遍历 item_equal->used_tables() 查找 CompanionSetCollection::m_table_num_to_companion_set[i] 是否一致，如果一致则返回 CompanionSet
     return false;
   }
-  if (item_equal->const_arg() != nullptr) {
+  if (item_equal->const_arg() != nullptr) { // 如果有常量
     return false;
   }
   return true;
@@ -2064,13 +2067,13 @@ bool ShouldCompleteMeshForCondition(
 
 // Extract multiple equalities that we should create mesh edges for.
 // See ShouldCompleteMeshForCondition().
-void ExtractCycleMultipleEqualities(
+void ExtractCycleMultipleEqualities(  // 遍历 conditions 数组，如果是 = 等式，且迭代器的 source_multiple_equality 是全连接，则把该 source_multiple_equality 放进 multiple_equalities 数组
     const Mem_root_array<Item *> &conditions,
     const CompanionSetCollection &companion_collection,
     Mem_root_array<Item_equal *> *multiple_equalities) {
   for (Item *item : conditions) {
     assert(!IsMultipleEquals(item));  // Should have been canonicalized earlier.
-    if (is_function_of_type(item, Item_func::EQ_FUNC)) {
+    if (is_function_of_type(item, Item_func::EQ_FUNC)) {  // 如果是 = 等式
       Item_func_eq *eq_item = down_cast<Item_func_eq *>(item);
       if (eq_item->source_multiple_equality != nullptr &&
           ShouldCompleteMeshForCondition(eq_item->source_multiple_equality,
@@ -2083,14 +2086,14 @@ void ExtractCycleMultipleEqualities(
 
 // Extract multiple equalities that we should create mesh edges for.
 // See ShouldCompleteMeshForCondition().
-void ExtractCycleMultipleEqualitiesFromJoinConditions(
+void ExtractCycleMultipleEqualitiesFromJoinConditions(// 遍历 expr->equijoin_conditions，如果迭代器 source_multiple_equality 不为空，且它满足全连接，则把 迭代器的 source_multiple_equality 放入  multiple_equalities 数组
     const RelationalExpression *expr,
     const CompanionSetCollection &companion_collection,
     Mem_root_array<Item_equal *> *multiple_equalities) {
   if (expr->type == RelationalExpression::TABLE) {
     return;
   }
-  for (Item_eq_base *eq_item : expr->equijoin_conditions) {
+  for (Item_eq_base *eq_item : expr->equijoin_conditions) { // 遍历 expr->equijoin_conditions
     if (eq_item->source_multiple_equality != nullptr &&
         ShouldCompleteMeshForCondition(eq_item->source_multiple_equality,
                                        companion_collection)) {
@@ -2108,13 +2111,13 @@ void ExtractCycleMultipleEqualitiesFromJoinConditions(
   optimizer. Non-join predicates are done near the start in
   MakeJoinHypergraph().
  */
-bool CanonicalizeJoinConditions(THD *thd, RelationalExpression *expr) {
+bool CanonicalizeJoinConditions(THD *thd, RelationalExpression *expr) { // 规范化 JoinConditions：先规范化 expr->join_conditions，然后遍历 expr->join_conditions，不处理里面的子查询、标量。最后递归规范化 expr->left 和 expr->right
   if (expr->type == RelationalExpression::TABLE) {
     return false;
   }
   assert(expr->equijoin_conditions
              .empty());  // MakeHashJoinConditions() has not run yet.
-  if (CanonicalizeConditions(
+  if (CanonicalizeConditions( // 规范化 Conditions：把 (A.x, B.x, D.x, E.x)、allowed_tables={A,B,C,D} 转换成  A.x = B.x and B.x = D.x (E.x is ignored). 然后重新拆分 conditions 成新的数组，比如前面的例子拆成 A.x = B.x 和 B.x = D.x
           thd, GetVisibleTables(expr->left) | GetVisibleTables(expr->right),
           expr->tables_in_subtree, &expr->join_conditions)) {
     return true;
@@ -2128,10 +2131,10 @@ bool CanonicalizeJoinConditions(THD *thd, RelationalExpression *expr) {
   // (in ClearImpossibleJoinConditions(), where we also propagate this
   // property up the tree).
   for (Item *cond : expr->join_conditions) {
-    if (cond->has_subquery() || cond->cost().IsExpensive()) {
+    if (cond->has_subquery() || cond->cost().IsExpensive()) { // 不处理 expr->join_conditions 中的子查询
       continue;
     }
-    if (cond->const_for_execution() && cond->val_int() == 0) {
+    if (cond->const_for_execution() && cond->val_int() == 0) {  // 标量
       expr->join_conditions_reject_all_rows = true;
       break;
     }
@@ -2157,7 +2160,7 @@ bool CanonicalizeJoinConditions(THD *thd, RelationalExpression *expr) {
 
   The function recurses down the join tree.
  */
-void MakeHashJoinConditions(THD *thd, RelationalExpression *expr) {
+void MakeHashJoinConditions(THD *thd, RelationalExpression *expr) { // 在 expr->join_conditions 中查找符合 hash join 条件的 item，然后添加到 expr->equijoin_conditions 中，接着在 expr->join_conditions 中删除
   if (expr->type == RelationalExpression::TABLE) {
     return;
   }
@@ -2167,14 +2170,14 @@ void MakeHashJoinConditions(THD *thd, RelationalExpression *expr) {
 
     for (Item *item : expr->join_conditions) {
       // See if this is a (non-degenerate) equijoin condition.
-      if (item->type() == Item::FUNC_ITEM) {
+      if (item->type() == Item::FUNC_ITEM) {  // Item::FUNC_ITEM 有3种等式： Item_equal、Item_func_equal、Item_func_eq
         Item_func *func_item = down_cast<Item_func *>(item);
-        if (func_item->contains_only_equi_join_condition()) {
+        if (func_item->contains_only_equi_join_condition()) {  // Item_equal 类型时，返回 const_arg() == nullptr;。Item_eq_base 类型时， 1、左边或者右边没表时，返回 FALSE； 2、t1.x = t1.y + t2.x 这种左右两边有共同表时，返回 FALSE。3、左边是 Item::REF_ITEM 且是 Item_ref::VIEW_REF 且使用的表数为0,则返回 FALSE。 4、右边同3。 这用来决定是否使用 hash join 或者在 join 后要 filter
           Item_eq_base *join_condition = down_cast<Item_eq_base *>(func_item);
-          if (IsHashEquijoinCondition(join_condition,
+          if (IsHashEquijoinCondition(join_condition, //item->get_arg(0)->used_tables() 跟 expr 的 left_side 相交跟 right_side 不相交，item->get_arg(1)->used_tables() 也一样，则它是 hash join 条件
                                       expr->left->tables_in_subtree,
                                       expr->right->tables_in_subtree)) {
-            expr->equijoin_conditions.push_back(join_condition);
+            expr->equijoin_conditions.push_back(join_condition);  // 添加到 expr->equijoin_conditions 中
             continue;
           }
         }
@@ -2188,11 +2191,11 @@ void MakeHashJoinConditions(THD *thd, RelationalExpression *expr) {
   MakeHashJoinConditions(thd, expr->right);
 }
 
-void FindConditionsUsedTables(THD *thd, RelationalExpression *expr) {
+void FindConditionsUsedTables(THD *thd, RelationalExpression *expr) { // 对 expr->conditions_used_tables 赋值，然后递归
   if (expr->type == RelationalExpression::TABLE) {
     return;
   }
-  expr->conditions_used_tables = UsedTablesForCondition(*expr);
+  expr->conditions_used_tables = UsedTablesForCondition(*expr);  // 返回 expr->join_conditions 使用的 table_map
   FindConditionsUsedTables(thd, expr->left);
   FindConditionsUsedTables(thd, expr->right);
 }
@@ -2200,10 +2203,10 @@ void FindConditionsUsedTables(THD *thd, RelationalExpression *expr) {
 /**
   Run simple CSE on all conditions (see CommonSubexpressionElimination()).
  */
-void CSEConditions(THD *thd, Mem_root_array<Item *> *conditions) {
+void CSEConditions(THD *thd, Mem_root_array<Item *> *conditions) {  // 对 conditions 数组中的每个元素进行处理，每个元素的 or 条件中共同子表达式进行消除，然后把 conditions 重新拆分成新的数组
   bool need_resplit = false;
   for (Item *&item : *conditions) {
-    Item *new_item = CommonSubexpressionElimination(item);
+    Item *new_item = CommonSubexpressionElimination(item);  // 共同子表达式消除
     if (new_item != item) {
       need_resplit = true;
       item = new_item;
@@ -2218,12 +2221,12 @@ void CSEConditions(THD *thd, Mem_root_array<Item *> *conditions) {
   Do some equality and constant propagation, conversion/folding work needed
   for correctness and performance.
  */
-bool EarlyNormalizeConditions(THD *thd, RelationalExpression *join,
-                              Mem_root_array<Item *> *conditions,
-                              bool *always_false) {
-  CSEConditions(thd, conditions);
+bool EarlyNormalizeConditions(THD *thd, RelationalExpression *join,  // 总体思想是：消除多余的过滤条件。 1、对 conditions 数组中的每个元素进行处理，每个元素的 or 条件中共同子表达式进行消除，然后把 conditions 重新拆分成新的数组
+                              Mem_root_array<Item *> *conditions,    // 2、遍历 conditions 数组，如果 it 是过滤器或者不是 MULT_EQUAL_FUNC，先获取 it 所在的 join->tables_in_subtree。 如果 it 是字段，通过 item->item_equal 获取 multiple equalities，2.1、如果 item_equal 有常量，判断 item 和 常量的数据类型是否兼容，如果兼任则返回常量；2.2、如果没有常量，遍历 item->item_equal 中的元素，如果该元素使用的表都在 tables_in_subtree 中，则使用该元素替换 it
+                              bool *always_false) {                  // 2.3、移除常量和 eq items，结果放在 res 中，然后检查 res 是 Item::COND_TRUE 还是 Item::COND_FALSE。 最后重新拆分 conditions 成新的数组
+  CSEConditions(thd, conditions);  // 对 conditions 数组中的每个元素进行处理，每个元素的 or 条件中共同子表达式进行消除，然后把 conditions 重新拆分成新的数组
   bool need_resplit = false;
-  for (auto it = conditions->begin(); it != conditions->end();) {
+  for (auto it = conditions->begin(); it != conditions->end();) { // 遍历 conditions 数组
     /**
       For simple filters, propagate constants if there are any
       established through multiple equalities. Note that most of the
@@ -2244,14 +2247,14 @@ bool EarlyNormalizeConditions(THD *thd, RelationalExpression *join,
       equi-join condition rather than an extra predicate for the join.
     */
     const bool is_filter =
-        popcount((*it)->used_tables() & ~PSEUDO_TABLE_BITS) < 2;
-    if (is_filter || !is_function_of_type(*it, Item_func::MULT_EQUAL_FUNC)) {
+        popcount((*it)->used_tables() & ~PSEUDO_TABLE_BITS) < 2;  // 如果 it 涉及的表小于2，那个这个 item 是个过滤器
+    if (is_filter || !is_function_of_type(*it, Item_func::MULT_EQUAL_FUNC)) { // 如果 it 是过滤器或者不是 MULT_EQUAL_FUNC，先获取 it 所在的 join->tables_in_subtree。 如果 it 是字段，通过 item->item_equal 获取 multiple equalities，1、如果 item_equal 有常量，判断 item 和 常量的数据类型是否兼容，如果兼任则返回常量；2、如果没有常量，遍历 item->item_equal 中的元素，如果该元素使用的表都在 tables_in_subtree 中，则使用该元素替换 it
       table_map tables_in_subtree = TablesBetween(0, MAX_TABLES);
       // If this is a degenerate join condition i.e. all fields in the
       // join condition come from the same side of the join, we need to
       // find replacements if any from the same side so that the condition
       // continues to be pushable to that side.
-      if (join != nullptr) {
+      if (join != nullptr) {  // 如果 it 只是在 join 的左边，则设置 tables_in_subtree 为 join->left->tables_in_subtree，右边同样，否则为 join->tables_in_subtree
         tables_in_subtree =
             IsSubset((*it)->used_tables(), join->left->tables_in_subtree)
                 ? join->left->tables_in_subtree
@@ -2260,36 +2263,36 @@ bool EarlyNormalizeConditions(THD *thd, RelationalExpression *join,
                        ? join->right->tables_in_subtree
                        : join->tables_in_subtree);
       }
-      *it = CompileItem(
+      *it = CompileItem(// 这段代码功能：如果 it 是字段，通过 item->item_equal 获取 multiple equalities，1、如果 item_equal 有常量，判断 item 和 常量的数据类型是否兼容，如果兼任则返回常量；2、如果没有常量，遍历 item->item_equal 中的元素，如果该元素使用的表都在 tables_in_subtree 中，则使用该元素替换 it
           *it, [](Item *) { return true; },
           [tables_in_subtree, is_filter](Item *item) -> Item * {
-            if (item->type() == Item::FIELD_ITEM) {
+            if (item->type() == Item::FIELD_ITEM) { // 如果是字段
               Item_equal *item_equal =
-                  down_cast<Item_field *>(item)->item_equal;
+                  down_cast<Item_field *>(item)->item_equal;  // 通过 item->item_equal 获取 multiple equalities
               if (item_equal) {
-                Item *const_item = item_equal->const_arg();
+                Item *const_item = item_equal->const_arg(); // 如果 item_equal 有常量
                 if (is_filter && const_item != nullptr &&
-                    item->has_compatible_context(const_item)) {
+                    item->has_compatible_context(const_item)) { // 判断 item 和 常量的数据类型是否兼容，如果兼任则常量替换 it
                   return const_item;
-                } else if (!is_filter && const_item == nullptr) {
-                  for (Item_field &field : item_equal->get_fields()) {
+                } else if (!is_filter && const_item == nullptr) { // 如果非过滤器，且没有常量
+                  for (Item_field &field : item_equal->get_fields()) {  // 遍历 item->item_equal 中的元素，如果该元素使用的表都在 tables_in_subtree 中，则使用该元素替换 it
                     if (IsSubset(field.used_tables(), tables_in_subtree))
                       return &field;
                   }
                 }
               }
             }
-            return item;
+            return item; // 如果不是字段，返回原 item
           });
     }
 
     const Item *const old_item = *it;
     Item::cond_result res;
-    if (remove_eq_conds(thd, *it, &*it, &res)) {
+    if (remove_eq_conds(thd, *it, &*it, &res)) {  // 移除常量和 eq items，结果放在 res 中，然后检查 res 是 Item::COND_TRUE 还是 Item::COND_FALSE
       return true;
     }
 
-    if (res == Item::COND_TRUE) {
+    if (res == Item::COND_TRUE) { // 检查 res 是 Item::COND_TRUE 还是 Item::COND_FALSE
       // Remove always true conditions from the conjunction.
       it = conditions->erase(it);
     } else if (res == Item::COND_FALSE) {
@@ -2303,7 +2306,7 @@ bool EarlyNormalizeConditions(THD *thd, RelationalExpression *join,
       // If the condition was replaced by a conjunction, we need to split it and
       // add its children to conditions, so that its individual elements can be
       // considered for condition pushdown later.
-      if (*it != old_item && IsAnd(*it)) {
+      if (*it != old_item && IsAnd(*it)) {  // 判断 it 是否是 and 条件
         need_resplit = true;
       }
 
@@ -2313,7 +2316,7 @@ bool EarlyNormalizeConditions(THD *thd, RelationalExpression *join,
   }
 
   if (need_resplit) {
-    *conditions = ResplitConditions(thd, *conditions);
+    *conditions = ResplitConditions(thd, *conditions); // 例子：把 A.x = B.x and B.x = D.x 这样的条件转换成 Mem_root_array<Item *> 数组，里面包含两个元素 A.x = B.x 和 B.x = D.x
   }
 
   return false;
@@ -2358,20 +2361,20 @@ string PrintJoinList(const mem_root_deque<Table_ref *> &join_list, int level) {
 
   NOTE: This returns a table_map, which is later converted to a NodeMap.
  */
-table_map FindTESForCondition(table_map used_tables,
+table_map FindTESForCondition(table_map used_tables,  // 计算 expr 的 TES，参数 used_tables 是谓词使用到的表。在 LEFT_JOIN 或者 ANTIJOIN 中，谓词跟 expr->right->tables_in_subtree 相交时，会把 expr->left 的 tables_in_subtree、equijoin_conditions、join_conditions 都计算进 TES
                               const RelationalExpression *expr) {
   if (expr->type == RelationalExpression::TABLE) {
     // We're at the bottom of an inner join stack; nothing to see here.
     // (We could just as well return 0, but this at least makes sure the
     // SES is included in the TES.)
     return used_tables;
-  } else if (expr->type == RelationalExpression::LEFT_JOIN ||
+  } else if (expr->type == RelationalExpression::LEFT_JOIN || // LEFT_JOIN 或者 ANTIJOIN
              expr->type == RelationalExpression::ANTIJOIN) {
     table_map tes = used_tables;
-    if (Overlaps(used_tables, expr->left->tables_in_subtree)) {
+    if (Overlaps(used_tables, expr->left->tables_in_subtree)) { // 如果 used_tables 跟 expr->left->tables_in_subtree 相交，则递归
       tes |= FindTESForCondition(used_tables, expr->left);
     }
-    if (Overlaps(used_tables, expr->right->tables_in_subtree)) {
+    if (Overlaps(used_tables, expr->right->tables_in_subtree)) { // 如果 used_tables 跟 expr->right->tables_in_subtree 相交，则把 expr->left->tables_in_subtree、expr->equijoin_conditions 使用到的表、expr->join_conditions 使用到的表都合并到 TES
       // The predicate needs a table from the right-hand side, but this join can
       // cause that table to become NULL, so we need to delay until the join has
       // happened. We do this by demanding that all tables on the left side have
@@ -2424,7 +2427,7 @@ table_map FindTESForCondition(table_map used_tables,
 
   See also Dbug_table_list_dumper.
  */
-string PrintDottyHypergraph(const JoinHypergraph &graph) {
+string PrintDottyHypergraph(const JoinHypergraph &graph) {  // 打印 dotty graph
   string digraph;
   digraph =
       StringPrintf("digraph G {  # %zu edges\n", graph.graph.edges.size() / 2);
@@ -2523,7 +2526,7 @@ string PrintDottyHypergraph(const JoinHypergraph &graph) {
   return digraph;
 }
 
-size_t EstimateHashJoinKeyWidth(const RelationalExpression *expr) {
+size_t EstimateHashJoinKeyWidth(const RelationalExpression *expr) { // 通过 expr->equijoin_conditions 的 get_arg(0)->max_char_length()、get_arg(1)->max_char_length()，计算 HASH JOIN 的 KEY 长度(取前面两个值的最小值)
   size_t ret = 0;
   for (Item_eq_base *join_condition : expr->equijoin_conditions) {
     // We heuristically limit our estimate of blobs to 4 kB.
@@ -2543,7 +2546,7 @@ size_t EstimateHashJoinKeyWidth(const RelationalExpression *expr) {
 
 namespace {
 
-table_map IntersectIfNotDegenerate(table_map used_tables,
+table_map IntersectIfNotDegenerate(table_map used_tables, // 如果不相交则返回 available_tables，否则返回他们的交集
                                    table_map available_tables) {
   if (!Overlaps(used_tables, available_tables)) {
     // Degenerate case.
@@ -2570,21 +2573,21 @@ table_map IntersectIfNotDegenerate(table_map used_tables,
   gone or the TES has stopped growing; then we create our hyperedge by
   splitting the TES.
  */
-NodeMap AbsorbConflictRulesIntoTES(
+NodeMap AbsorbConflictRulesIntoTES( // 1、如果 TES 跟 rule 的左侧 needed_to_activate_rule 相交，则把 rule 的右侧合并到 TES 2、如果 TES 是 rule 右侧 required_nodes 的超集，则删除该 rule。 直到 TES 停止增长或者 conflict_rules 为空
     NodeMap total_eligibility_set,
     Mem_root_array<ConflictRule> *conflict_rules) {
   NodeMap prev_total_eligibility_set;
   do {
     prev_total_eligibility_set = total_eligibility_set;
     for (const ConflictRule &rule : *conflict_rules) {
-      if (Overlaps(rule.needed_to_activate_rule, total_eligibility_set)) {
+      if (Overlaps(rule.needed_to_activate_rule, total_eligibility_set)) {  // 如果 TES 跟 rule 的左侧相交，则把 rule 的右侧合并到 TES
         // This conflict rule will always be active, so we can add its right
         // side to the TES unconditionally. (The rule is now obsolete and
         // will be removed below.)
         total_eligibility_set |= rule.required_nodes;
       }
     }
-    auto new_end = std::remove_if(
+    auto new_end = std::remove_if(  // 如果 TES 是 rule 右侧的超集，则删除该 rule
         conflict_rules->begin(), conflict_rules->end(),
         [total_eligibility_set](const ConflictRule &rule) {
           // If the right side of the conflict rule is
@@ -2594,7 +2597,7 @@ NodeMap AbsorbConflictRulesIntoTES(
           return IsSubset(rule.required_nodes, total_eligibility_set);
         });
     conflict_rules->erase(new_end, conflict_rules->end());
-  } while (total_eligibility_set != prev_total_eligibility_set &&
+  } while (total_eligibility_set != prev_total_eligibility_set && // 如果 TES 增长且 conflict_rules 不为空，则继续循环。也就是 TES 停止增长或者 conflict_rules 为空，则退出循环。
            !conflict_rules->empty());
   return total_eligibility_set;
 }
@@ -2673,22 +2676,22 @@ NodeMap AbsorbConflictRulesIntoTES(
  */
 Hyperedge FindHyperedgeAndJoinConflicts(THD *thd, NodeMap used_nodes,
                                         RelationalExpression *expr,
-                                        const JoinHypergraph *graph) {
+                                        const JoinHypergraph *graph) {  // 给 expr->conflict_rules 计算并赋值，然后返回超边
   assert(expr->type != RelationalExpression::TABLE);
 
   Mem_root_array<ConflictRule> conflict_rules(thd->mem_root);
-  ForEachJoinOperator(
+  ForEachJoinOperator(  // 按照论文构建 ConflictRule
       expr->left, [expr, graph, &conflict_rules](RelationalExpression *child) {
-        if (!OperatorsAreAssociative(*child, *expr)) {
+        if (!OperatorsAreAssociative(*child, *expr)) {  // 如果符合结合律
           // Prevent associative rewriting; we cannot apply this operator
           // (rule kicks in as soon as _any_ table from the right side
           // is seen) until we have all nodes mentioned on the left side of
           // the join condition.
-          const table_map left = IntersectIfNotDegenerate(
+          const table_map left = IntersectIfNotDegenerate( // 如果不相交则返回 available_tables ( 这里是 child->left->tables_in_subtree )，否则返回他们的交集
               child->conditions_used_tables, child->left->tables_in_subtree);
           conflict_rules.emplace_back(ConflictRule{
-              child->right->nodes_in_subtree,
-              GetNodeMapFromTableMap(left & ~PSEUDO_TABLE_BITS,
+              child->right->nodes_in_subtree, // child 的 右树节点
+              GetNodeMapFromTableMap(left & ~PSEUDO_TABLE_BITS, // 根据 table_num 获取 node_num
                                      graph->table_num_to_node_num)});
         }
         if (!OperatorsAreLeftAsscom(*child, *expr)) {
@@ -2706,7 +2709,7 @@ Hyperedge FindHyperedgeAndJoinConflicts(THD *thd, NodeMap used_nodes,
       });
 
   // Exactly the same as the previous, just mirrored left/right.
-  ForEachJoinOperator(
+  ForEachJoinOperator(  // 按照论文构建 ConflictRule
       expr->right, [expr, graph, &conflict_rules](RelationalExpression *child) {
         if (!OperatorsAreAssociative(*expr, *child)) {
           const table_map right = IntersectIfNotDegenerate(
@@ -2729,18 +2732,18 @@ Hyperedge FindHyperedgeAndJoinConflicts(THD *thd, NodeMap used_nodes,
   // Now go through all of the conflict rules and use them to grow the
   // hypernode, making it more restrictive if possible/needed.
   NodeMap total_eligibility_set =
-      AbsorbConflictRulesIntoTES(used_nodes, &conflict_rules);
+      AbsorbConflictRulesIntoTES(used_nodes, &conflict_rules); // 1、如果 TES 跟 rule 的左侧相交，则把 rule 的右侧合并到 TES 2、如果 TES 是 rule 右侧的超集，则删除该 rule。 直到 TES 停止增长或者 conflict_rules 为空
 
   // Check for degenerate predicates and Cartesian products;
   // we cannot have hyperedges with empty end points. If we have to
   // go down this path, re-check if there are any conflict rules
   // that we can now get rid of.
-  if (!Overlaps(total_eligibility_set, expr->left->nodes_in_subtree)) {
+  if (!Overlaps(total_eligibility_set, expr->left->nodes_in_subtree)) { //处理笛卡尔积： 如果 TES 跟 expr->left->nodes_in_subtree 不相交，则把整个 expr->left->nodes_in_subtree 添加到 TES
     total_eligibility_set |= expr->left->nodes_in_subtree;
     total_eligibility_set =
         AbsorbConflictRulesIntoTES(total_eligibility_set, &conflict_rules);
   }
-  if (!Overlaps(total_eligibility_set, expr->right->nodes_in_subtree)) {
+  if (!Overlaps(total_eligibility_set, expr->right->nodes_in_subtree)) { //处理笛卡尔积： 如果 TES 跟 expr->right->nodes_in_subtree 不相交，则把整个 expr->right->nodes_in_subtree 添加到 TES
     total_eligibility_set |= expr->right->nodes_in_subtree;
     total_eligibility_set =
         AbsorbConflictRulesIntoTES(total_eligibility_set, &conflict_rules);
@@ -2749,16 +2752,16 @@ Hyperedge FindHyperedgeAndJoinConflicts(THD *thd, NodeMap used_nodes,
 
   const NodeMap left = total_eligibility_set & expr->left->nodes_in_subtree;
   const NodeMap right = total_eligibility_set & expr->right->nodes_in_subtree;
-  return {left, right};
+  return {left, right}; // 返回超边
 }
 
 size_t EstimateRowWidthForJoin(const JoinHypergraph &graph,
-                               const RelationalExpression *expr) {
+                               const RelationalExpression *expr) {  // (JOIN 字段的 HASH KEY 长度) + (所有表的所有字段长度累加) + 20
   // Estimate size of the join keys.
   size_t ret = EstimateHashJoinKeyWidth(expr);
 
   // Estimate size of the values.
-  for (int node_idx : BitsSetIn(expr->nodes_in_subtree)) {
+  for (int node_idx : BitsSetIn(expr->nodes_in_subtree)) {  // 所有表的所有字段长度累加
     const TABLE *table = graph.nodes[node_idx].table;
     for (uint i = 0; i < table->s->fields; ++i) {
       if (bitmap_is_set(table->read_set, i)) {
@@ -2783,7 +2786,7 @@ size_t EstimateRowWidthForJoin(const JoinHypergraph &graph,
   expensive predicates come first, and the less selective and more expensive
   ones come last.
  */
-void SortPredicates(Predicate *begin, Predicate *end) {
+void SortPredicates(Predicate *begin, Predicate *end) { // 重新排序谓语，把最常用、代价最低的谓词放前面，把谓词有子查询放后面，把存储过程和 UDFs 放最后面
   if (std::distance(begin, end) <= 1) return;  // Nothing to sort.
 
   /*
@@ -2802,20 +2805,20 @@ void SortPredicates(Predicate *begin, Predicate *end) {
 
   // Order the predicates so that we minimize the expected cost of evaluating
   // the conjuction.
-  std::stable_sort(begin, end, [&](const Predicate &p1, const Predicate &p2) {
+  std::stable_sort(begin, end, [&](const Predicate &p1, const Predicate &p2) {  // 重新排序谓词，把开销较小的谓词放前面
     return rank(p1) < rank(p2);
   });
 
   // If the predicates contain subqueries, move them towards the end, regardless
   // of their selectivity, since they could be expensive to evaluate. We could
   // refine this by looking at the estimated cost of the contained subqueries.
-  std::stable_partition(begin, end, [](const Predicate &pred) {
+  std::stable_partition(begin, end, [](const Predicate &pred) { // 如果谓语有子查询，则把他们放到后面
     return !pred.condition->has_subquery();
   });
 
   // UDFs and stored procedures have unknown and potentially very high cost.
   // Move them last.
-  std::stable_partition(begin, end, [](const Predicate &p) {
+  std::stable_partition(begin, end, [](const Predicate &p) {  // 存储过程和 UDFs 放到最后面
     return !p.condition->cost().IsExpensive();
   });
 }
@@ -2824,7 +2827,7 @@ void SortPredicates(Predicate *begin, Predicate *end) {
   Add the given predicate to the list of WHERE predicates, doing some
   bookkeeping that such predicates need.
  */
-int AddPredicate(THD *thd, Item *condition, bool was_join_condition,
+int AddPredicate(THD *thd, Item *condition, bool was_join_condition,  // 把这个函数的参数初始化 Predicate 谓词，然后把这个谓词加入 JoinHypergraph 的 predicates。计算它的 condition、used_nodes、total_eligibility_set、selectivity、was_join_condition、source_multiple_equality_idx、functional_dependencies_idx、contained_subqueries，然后放到 graph->predicates 中
                  int source_multiple_equality_idx,
                  const RelationalExpression *root,
                  const CompanionSetCollection *companion_collection,
@@ -2838,7 +2841,7 @@ int AddPredicate(THD *thd, Item *condition, bool was_join_condition,
 
   const table_map used_tables =
       condition->used_tables() & ~(INNER_TABLE_BIT | OUTER_REF_TABLE_BIT);
-  pred.used_nodes =
+  pred.used_nodes = // 根据 condition->used_tables() 计算 pred.used_nodes
       GetNodeMapFromTableMap(used_tables, graph->table_num_to_node_num);
 
   const bool references_regular_tables =
@@ -2848,7 +2851,7 @@ int AddPredicate(THD *thd, Item *condition, bool was_join_condition,
   if (was_join_condition || !references_regular_tables) {
     total_eligibility_set = used_tables;
   } else {
-    total_eligibility_set = FindTESForCondition(used_tables, root) &
+    total_eligibility_set = FindTESForCondition(used_tables, root) &  // 计算 expr 的 TES，参数 used_tables 是谓词使用到的表。在 LEFT_JOIN 或者 ANTIJOIN 中，谓词跟 expr->right->tables_in_subtree 相交时，会把 expr->left 的 tables_in_subtree、equijoin_conditions、join_conditions 都计算进 TES
                             ~(INNER_TABLE_BIT | OUTER_REF_TABLE_BIT);
   }
   pred.total_eligibility_set = GetNodeMapFromTableMap(
@@ -2860,7 +2863,7 @@ int AddPredicate(THD *thd, Item *condition, bool was_join_condition,
   // any equijoins do not have a companion set.
   const CompanionSet *companion_set = nullptr;
   if (references_regular_tables && companion_collection != nullptr) {
-    companion_set = companion_collection->Find(used_tables);
+    companion_set = companion_collection->Find(used_tables);  // 遍历 tables 查找 CompanionSetCollection::m_table_num_to_companion_set[i] 是否一致，如果一致则返回 CompanionSet
   }
 
   pred.selectivity =
@@ -2904,7 +2907,7 @@ int AddPredicate(THD *thd, Item *condition, bool was_join_condition,
   Return whether we can find a path from “source” to “destination”, without
   using forbidden_edge_idx.
  */
-bool AreNodesConnected(const Hypergraph &graph, int source, int destination,
+bool AreNodesConnected(const Hypergraph &graph, int source, int destination,  // 判断 Hypergraph.nodes[source] 跟 Hypergraph.nodes[destination] 是否连接（简单边、超边都算）
                        int forbidden_edge_idx, NodeMap *seen_nodes) {
   if (source == destination) {
     return true;
@@ -2951,7 +2954,7 @@ bool AreNodesConnected(const Hypergraph &graph, int source, int destination,
   joins (the companion set) -- but we cannot ignore hyperedges, since we
   determine companion sets before we know all the join predicates.
  */
-bool IsPartOfCycle(const JoinHypergraph *graph, int edge_idx) {
+bool IsPartOfCycle(const JoinHypergraph *graph, int edge_idx) { // 根据 edge_idx 计算 RelationalExpression expr，只处理 INNER_JOIN 的 expr。如果除了 edge_idx，还有别的边连接，则返回 true。也就是判断边 graph->graph.edges[edge_idx] 有没有别的回环
   const RelationalExpression *expr = graph->edges[edge_idx / 2].expr;
   if (expr->type != RelationalExpression::INNER_JOIN) {
     // Outer joins are always a bridge; we also ignore straight joins
@@ -2980,34 +2983,34 @@ bool IsPartOfCycle(const JoinHypergraph *graph, int edge_idx) {
   For each of the given join conditions, add a cycle-inducing edge to the
   hypergraph.
  */
-void AddCycleEdges(THD *thd, const Mem_root_array<Item *> &cycle_inducing_edges,
+void AddCycleEdges(THD *thd, const Mem_root_array<Item *> &cycle_inducing_edges, // 遍历 cycle_inducing_edges 中的 Item，如果在 JoinHypergraph 的 edges 没找到对应的边，则构建新的 JoinPredicate 并添加到 JoinHypergraph 的 edges。如果找到对应的边，则更新它的 selectivity。 最后 JoinHypergraph 的对应 nodes 的 join_conditions_pushable_to_this 添加 cond，形成回环。
                    CompanionSetCollection &companion_collection,
                    JoinHypergraph *graph, string *trace) {
-  for (Item *cond : cycle_inducing_edges) {
-    const NodeMap used_nodes = GetNodeMapFromTableMap(
+  for (Item *cond : cycle_inducing_edges) { // 遍历 cycle_inducing_edges 中的 Item
+    const NodeMap used_nodes = GetNodeMapFromTableMap(  // 查看 cond 在 graph->table_num_to_node_num 使用的表 used_nodes
         cond->used_tables(), graph->table_num_to_node_num);
     RelationalExpression *expr = nullptr;
     JoinPredicate *pred = nullptr;
 
-    const NodeMap left = IsolateLowestBit(used_nodes);  // Arbitrary.
-    const NodeMap right = used_nodes & ~left;
+    const NodeMap left = IsolateLowestBit(used_nodes);  // Arbitrary. // used_nodes 转为二进制然后去除最低一位
+    const NodeMap right = used_nodes & ~left; //  used_nodes 转为二进制的最后一位
 
     // See if we already have a suitable edge.
-    for (size_t edge_idx = 0; edge_idx < graph->edges.size(); ++edge_idx) {
-      Hyperedge edge = graph->graph.edges[edge_idx * 2];
-      if ((edge.left | edge.right) == used_nodes &&
+    for (size_t edge_idx = 0; edge_idx < graph->edges.size(); ++edge_idx) { // 遍历 JoinHypergraph 的 edges
+      Hyperedge edge = graph->graph.edges[edge_idx * 2];  // 查看对应的 graph->graph.edges
+      if ((edge.left | edge.right) == used_nodes && // 如果 graph->graph.edges 跟 used_nodes 相等，且是 INNER_JOIN，则表示找到对应的边，然后把临时变量 JoinPredicate *pred 指向对应的边
           graph->edges[edge_idx].expr->type ==
               RelationalExpression::INNER_JOIN) {
-        pred = &graph->edges[edge_idx];
-        expr = pred->expr;
-        break;
+        pred = &graph->edges[edge_idx]; // JoinPredicate *pred = graph->edges[edge_idx]
+        expr = pred->expr;  // RelationalExpression *expr = pred->expr
+        break;  // 找到对应的边，则跳出循环
       }
     }
 
-    if (expr == nullptr) {
-      graph->graph.AddEdge(left, right);
+    if (expr == nullptr) {  // 如果没找到对应的边，则 Hypergraph 添加人工设置的边，然后更新 JoinPredicate *pred 中的 RelationalExpression *expr，然后构建新的 JoinPredicate 添加到 JoinHypergraph 的 edges 中
+      graph->graph.AddEdge(left, right);  // Hypergraph 添加人工设置的边
 
-      expr = new (thd->mem_root) RelationalExpression(thd);
+      expr = new (thd->mem_root) RelationalExpression(thd); // 计算新边对应的 RelationalExpression 设置
       expr->type = RelationalExpression::INNER_JOIN;
 
       // TODO(sgunders): This does not really make much sense, but
@@ -3019,7 +3022,7 @@ void AddCycleEdges(THD *thd, const Mem_root_array<Item *> &cycle_inducing_edges,
           GetNodeMapFromTableMap(cond->used_tables() & ~PSEUDO_TABLE_BITS,
                                  graph->table_num_to_node_num);
 
-      expr->companion_set = companion_collection.Find(expr->tables_in_subtree);
+      expr->companion_set = companion_collection.Find(expr->tables_in_subtree);  // 遍历 tables 查找 CompanionSetCollection::m_table_num_to_companion_set[i] 是否一致，如果一致则返回 CompanionSet
 
       double selectivity =
           EstimateSelectivity(thd, cond, *expr->companion_set, trace);
@@ -3028,11 +3031,11 @@ void AddCycleEdges(THD *thd, const Mem_root_array<Item *> &cycle_inducing_edges,
       graph->edges.push_back(JoinPredicate{
           expr, selectivity, estimated_bytes_per_row,
           /*functional_dependencies=*/0, /*functional_dependencies_idx=*/{}});
-    } else {
+    } else {  // 如果找到对应的边，且 cond 属于 expr->join_conditions，expr->join_conditions，则跳过本 cond 的遍历，否则计算 JoinPredicate 的 selectivity
       // Skip this item if it is a duplicate (this can
       // happen with multiple equalities in particular).
       bool dup = false;
-      for (Item *other_cond : expr->equijoin_conditions) {
+      for (Item *other_cond : expr->equijoin_conditions) {  // 如果 cond 属于 expr->join_conditions，则遍历下个 cycle_inducing_edges 中的 Item
         if (other_cond->eq(cond, /*binary_cmp=*/true)) {
           dup = true;
           break;
@@ -3041,7 +3044,7 @@ void AddCycleEdges(THD *thd, const Mem_root_array<Item *> &cycle_inducing_edges,
       if (dup) {
         continue;
       }
-      for (Item *other_cond : expr->join_conditions) {
+      for (Item *other_cond : expr->join_conditions) {  // 如果 cond 属于 expr->join_conditions，则遍历下个 cycle_inducing_edges 中的 Item
         if (other_cond->eq(cond, /*binary_cmp=*/true)) {
           dup = true;
           break;
@@ -3053,8 +3056,8 @@ void AddCycleEdges(THD *thd, const Mem_root_array<Item *> &cycle_inducing_edges,
       pred->selectivity *=
           EstimateSelectivity(thd, cond, *expr->companion_set, trace);
     }
-    if (cond->type() == Item::FUNC_ITEM &&
-        down_cast<Item_func *>(cond)->contains_only_equi_join_condition()) {
+    if (cond->type() == Item::FUNC_ITEM &&  // 把 cond 添加进 expr->equijoin_conditions 或 expr->join_conditions
+        down_cast<Item_func *>(cond)->contains_only_equi_join_condition()) {  // Item_equal 类型时，返回 const_arg() == nullptr;。Item_eq_base 类型时， 1、左边或者右边没表时，返回 FALSE； 2、t1.x = t1.y + t2.x 这种左右两边有共同表时，返回 FALSE。3、左边是 Item::REF_ITEM 且是 Item_ref::VIEW_REF 且使用的表数为0,则返回 FALSE。 4、右边同3。 这用来决定是否使用 hash join 或者在 join 后要 filter
       expr->equijoin_conditions.push_back(down_cast<Item_eq_base *>(cond));
     } else {
       expr->join_conditions.push_back(cond);
@@ -3063,9 +3066,9 @@ void AddCycleEdges(THD *thd, const Mem_root_array<Item *> &cycle_inducing_edges,
     // Make this predicate potentially sargable (cycle edges are always
     // simple equalities).
     assert(IsSimpleEdge(left, right));
-    const int left_node_idx = *BitsSetIn(left).begin();
-    const int right_node_idx = *BitsSetIn(right).begin();
-    graph->nodes[left_node_idx].join_conditions_pushable_to_this.push_back(
+    const int left_node_idx = *BitsSetIn(left).begin(); // 只选 left 的第一位
+    const int right_node_idx = *BitsSetIn(right).begin(); // 只选 right 的第一位
+    graph->nodes[left_node_idx].join_conditions_pushable_to_this.push_back( // JoinHypergraph 的对应 nodes 的 join_conditions_pushable_to_this 添加 cond
         cond);
     graph->nodes[right_node_idx].join_conditions_pushable_to_this.push_back(
         cond);
@@ -3094,21 +3097,21 @@ void AddCycleEdges(THD *thd, const Mem_root_array<Item *> &cycle_inducing_edges,
   counted as WHERE predicates (they are never automatically applied), so this
   is a separate use.
  */
-void PromoteCycleJoinPredicates(
+void PromoteCycleJoinPredicates( // 遍历 JoinHypergraph 的 edges，如果它有回环，则把 graph->edges[edge_idx / 2].expr 的 equijoin_conditions、join_conditions 添加到 JoinHypergraph 的 predicates
     THD *thd, const RelationalExpression *root,
     const Mem_root_array<Item_equal *> &multiple_equalities,
     const CompanionSetCollection &companion_collection, JoinHypergraph *graph,
-    string *trace) {
-  for (size_t edge_idx = 0; edge_idx < graph->graph.edges.size();
+    string *trace) { // 遍历 JoinHypergraph 的 edges，如果 edge_idx 有回环，
+  for (size_t edge_idx = 0; edge_idx < graph->graph.edges.size(); // 遍历 JoinHypergraph 的 edges
        edge_idx += 2) {
-    if (!IsPartOfCycle(graph, edge_idx)) {
+    if (!IsPartOfCycle(graph, edge_idx)) { // 根据 edge_idx 计算 RelationalExpression expr，只处理 INNER_JOIN 的 expr。如果除了 edge_idx，还有别的边连接，则返回 true。也就是判断边 graph->graph.edges[edge_idx] 有没有别的回环
       continue;
     }
     RelationalExpression *expr = graph->edges[edge_idx / 2].expr;
     expr->join_predicate_first = graph->predicates.size();
     for (Item *condition : expr->equijoin_conditions) {
-      AddPredicate(thd, condition, /*was_join_condition=*/true,
-                   FindSourceMultipleEquality(condition, multiple_equalities),
+      AddPredicate(thd, condition, /*was_join_condition=*/true,  // 把这个函数的参数初始化 Predicate 谓词，然后把这个谓词加入 JoinHypergraph 的 predicates。计算它的 condition、used_nodes、total_eligibility_set、selectivity、was_join_condition、source_multiple_equality_idx、functional_dependencies_idx、contained_subqueries，然后放到 graph->predicates 中
+                   FindSourceMultipleEquality(condition, multiple_equalities),  // 查找 Item_func_eq 是从 Mem_root_array<Item_equal *> 数组中哪个元素产生，返回元素的坐标
                    root, &companion_collection, graph, trace);
     }
     for (Item *condition : expr->join_conditions) {
@@ -3133,10 +3136,10 @@ void PromoteCycleJoinPredicates(
   and then defers the actual conflict detection logic to
   FindHyperedgeAndJoinConflicts().
  */
-void MakeJoinGraphFromRelationalExpression(THD *thd, RelationalExpression *expr,
-                                           string *trace,
+void MakeJoinGraphFromRelationalExpression(THD *thd, RelationalExpression *expr,  // 1、如果 RelationalExpression 是表，则更新 JoinHypergraph 的 graph、nodes、table_num_to_node_num，然后更新 RelationalExpression 的 nodes_in_subtree，然后返回
+                                           string *trace,                         // 2、如果不是表，则递归处理它的 left 和 right，然后更新它的 nodes_in_subtree、给 expr->conflict_rules 计算并赋值、graph->graph 添加新的边、计算 expr 的 selectivity，最后构建新的 JoinPredicate 放入 graph->edges
                                            JoinHypergraph *graph) {
-  if (expr->type == RelationalExpression::TABLE) {
+  if (expr->type == RelationalExpression::TABLE) {  // 如果 RelationalExpression 是表，则更新 JoinHypergraph 的 graph、nodes、table_num_to_node_num，然后更新 RelationalExpression 的 nodes_in_subtree，然后返回
     graph->graph.AddNode();
     graph->nodes.push_back(JoinHypergraph::Node{
         expr->table->table,
@@ -3150,9 +3153,9 @@ void MakeJoinGraphFromRelationalExpression(THD *thd, RelationalExpression *expr,
     return;
   }
 
-  MakeJoinGraphFromRelationalExpression(thd, expr->left, trace, graph);
-  MakeJoinGraphFromRelationalExpression(thd, expr->right, trace, graph);
-  expr->nodes_in_subtree =
+  MakeJoinGraphFromRelationalExpression(thd, expr->left, trace, graph); // 递归处理 RelationalExpression 的 left
+  MakeJoinGraphFromRelationalExpression(thd, expr->right, trace, graph); // 递归处理 RelationalExpression 的 right
+  expr->nodes_in_subtree =  // 更新 RelationalExpression 的 nodes_in_subtree
       expr->left->nodes_in_subtree | expr->right->nodes_in_subtree;
 
   table_map used_tables = 0;
@@ -3162,19 +3165,19 @@ void MakeJoinGraphFromRelationalExpression(THD *thd, RelationalExpression *expr,
   for (Item *condition : expr->equijoin_conditions) {
     used_tables |= condition->used_tables();
   }
-  const NodeMap used_nodes = GetNodeMapFromTableMap(
+  const NodeMap used_nodes = GetNodeMapFromTableMap( // 根据 table_num 获取 node_num
       used_tables & ~PSEUDO_TABLE_BITS, graph->table_num_to_node_num);
 
   const Hyperedge edge =
-      FindHyperedgeAndJoinConflicts(thd, used_nodes, expr, graph);
-  graph->graph.AddEdge(edge.left, edge.right);
+      FindHyperedgeAndJoinConflicts(thd, used_nodes, expr, graph);  // 给 expr->conflict_rules 计算并赋值，然后返回超边
+  graph->graph.AddEdge(edge.left, edge.right);  // graph->graph 添加新的边
 
   // Figure out whether we have two left joins that are associatively
   // reorderable, which can trigger a bug in our row count estimation. See the
   // definition of has_reordered_left_joins for more information.
-  if (!graph->has_reordered_left_joins &&
+  if (!graph->has_reordered_left_joins && // 检查是否连线两个 LEFT_JOIN
       expr->type == RelationalExpression::LEFT_JOIN) {
-    ForEachJoinOperator(expr->left, [expr, graph](RelationalExpression *child) {
+    ForEachJoinOperator(expr->left, [expr, graph](RelationalExpression *child) { // expr->left 下面的所有非表节点，执行 func
       if (child->type == RelationalExpression::LEFT_JOIN &&
           OperatorsAreAssociative(*child, *expr)) {
         graph->has_reordered_left_joins = true;
@@ -3193,7 +3196,7 @@ void MakeJoinGraphFromRelationalExpression(THD *thd, RelationalExpression *expr,
     *trace += StringPrintf("Selectivity of join %s:\n",
                            GenerateExpressionLabel(expr).c_str());
   }
-  double selectivity = 1.0;
+  double selectivity = 1.0; // 遍历 expr->equijoin_conditions 和 expr->join_conditions，计算 selectivity 的乘积
   for (Item *item : expr->equijoin_conditions) {
     selectivity *=
         EstimateSelectivity(current_thd, item, *expr->companion_set, trace);
@@ -3213,7 +3216,7 @@ void MakeJoinGraphFromRelationalExpression(THD *thd, RelationalExpression *expr,
       /*functional_dependencies=*/0, /*functional_dependencies_idx=*/{}});
 }
 
-NodeMap GetNodeMapFromTableMap(
+NodeMap GetNodeMapFromTableMap( // 根据 table_num 获取 node_num
     table_map map, const array<int, MAX_TABLES> &table_num_to_node_num) {
   NodeMap ret = 0;
   if (Overlaps(map, RAND_TABLE_BIT)) {  // Special case.
@@ -3233,9 +3236,9 @@ namespace {
 void AddMultipleEqualityPredicate(THD *thd,
                                   CompanionSetCollection &companion_collection,
                                   Item_equal *item_equal,
-                                  Item_field *left_field, int left_table_idx,
-                                  Item_field *right_field, int right_table_idx,
-                                  double selectivity, JoinHypergraph *graph) {
+                                  Item_field *left_field, int left_table_idx, // 1、如果 right_node_idx 和 left_node_idx 在超图中是否已经存在边，则查找对应的 RelationalExpression，查看 join_conditions、equijoin_conditions，检查是否有 Item_eq_base 属于 Item_equal，如果有则返回，如果没就重新计算 对应的 graph->edges 的 selectivity
+                                  Item_field *right_field, int right_table_idx, // 2、如果 right_node_idx 和 left_node_idx 在超图中不存在对应的边，则构建新的 JoinPredicate 放入 graph->edges
+                                  double selectivity, JoinHypergraph *graph) {  // 最后构建新的 Item_func_eq，然后放入 expr->equijoin_conditions、对应的 graph->nodes 的 join_conditions_pushable_to_this
   const int left_node_idx = graph->table_num_to_node_num[left_table_idx];
   const int right_node_idx = graph->table_num_to_node_num[right_table_idx];
 
@@ -3246,47 +3249,47 @@ void AddMultipleEqualityPredicate(THD *thd,
   // still want to add a simple edge, as it could in some cases be advantageous
   // to join along the simple edge before applying the hyperpredicate.
   RelationalExpression *expr = nullptr;
-  if (IsSubset(TableBitmap(right_node_idx),
+  if (IsSubset(TableBitmap(right_node_idx), // 如果 right_node_idx 和 left_node_idx 在超图中是否已经存在边
                graph->graph.nodes[left_node_idx].simple_neighborhood)) {
-    for (int edge_idx : graph->graph.nodes[left_node_idx].simple_edges) {
-      if (graph->graph.edges[edge_idx].right == TableBitmap(right_node_idx)) {
-        expr = graph->edges[edge_idx / 2].expr;
-        if (MultipleEqualityAlreadyExistsOnJoin(item_equal, *expr)) {
+    for (int edge_idx : graph->graph.nodes[left_node_idx].simple_edges) { // 遍历超图的 nodes[left_node_idx].simple_edges
+      if (graph->graph.edges[edge_idx].right == TableBitmap(right_node_idx)) {  // 查找 right_node_idx 和 left_node_idx 对应的边 
+        expr = graph->edges[edge_idx / 2].expr; // 根据上面的边查找对应的 RelationalExpression
+        if (MultipleEqualityAlreadyExistsOnJoin(item_equal, *expr)) { // 查看 RelationalExpression 的 join_conditions、equijoin_conditions，检查是否有 Item_eq_base 属于 Item_equal，如果有则返回
           return;
         }
-        graph->edges[edge_idx / 2].selectivity *= selectivity;
+        graph->edges[edge_idx / 2].selectivity *= selectivity;  // 如果没有，则重新计算对应的 graph->edges 的 selectivity
         break;
       }
     }
     assert(expr != nullptr);
-  } else {
+  } else { // 如果 right_node_idx 和 left_node_idx 在超图中不存在对应的边
     // There was none, so create a new one.
-    graph->graph.AddEdge(TableBitmap(left_node_idx),
+    graph->graph.AddEdge(TableBitmap(left_node_idx),  // graph->graph 添加一个边
                          TableBitmap(right_node_idx));
     expr = new (thd->mem_root) RelationalExpression(thd);
-    expr->type = RelationalExpression::INNER_JOIN;
+    expr->type = RelationalExpression::INNER_JOIN;  // 构建一个新的 INNER_JOIN 的 RelationalExpression
 
     // TODO(sgunders): This does not really make much sense, but
     // estimated_bytes_per_row doesn't make that much sense to begin with;
     // it will depend on the join order. See if we can replace it with a
     // per-table width calculation that we can sum up in the join
     // optimizer.
-    expr->tables_in_subtree =
+    expr->tables_in_subtree = // 计算 expr 的 tables_in_subtree
         TableBitmap(left_table_idx) | TableBitmap(right_table_idx);
-    expr->nodes_in_subtree =
+    expr->nodes_in_subtree = // 计算 expr 的 nodes_in_subtree
         TableBitmap(left_node_idx) | TableBitmap(right_node_idx);
 
-    expr->companion_set = companion_collection.Find(expr->tables_in_subtree);
+    expr->companion_set = companion_collection.Find(expr->tables_in_subtree); // 计算 expr 的 companion_set
 
     const size_t estimated_bytes_per_row =
         EstimateRowWidthForJoin(*graph, expr);
-    graph->edges.push_back(JoinPredicate{expr, selectivity,
+    graph->edges.push_back(JoinPredicate{expr, selectivity, // 构建新的 JoinPredicate 放入 graph->edges
                                          estimated_bytes_per_row,
                                          /*functional_dependencies=*/0,
                                          /*functional_dependencies_idx=*/{}});
   }
 
-  Item_func_eq *eq_item = MakeEqItem(left_field, right_field, item_equal);
+  Item_func_eq *eq_item = MakeEqItem(left_field, right_field, item_equal);  // 构建新的 Item_func_eq，然后放入 expr->equijoin_conditions、对应的 graph->nodes 的 join_conditions_pushable_to_this
   expr->equijoin_conditions.push_back(
       eq_item);  // NOTE: We run after MakeHashJoinConditions().
 
@@ -3305,7 +3308,7 @@ void AddMultipleEqualityPredicate(THD *thd,
   Must run after equijoin conditions are extracted. _Should_ be run after
   trivial conditions have been removed.
  */
-void CompleteFullMeshForMultipleEqualities(
+void CompleteFullMeshForMultipleEqualities( // 遍历 multiple_equalities 数组，对其中的每个元素的 multiple equality 全连接的关系，执行 AddMultipleEqualityPredicate
     THD *thd, const Mem_root_array<Item_equal *> &multiple_equalities,
     CompanionSetCollection &companion_collection, JoinHypergraph *graph,
     string *trace) {
@@ -3324,9 +3327,9 @@ void CompleteFullMeshForMultipleEqualities(
           continue;
         }
 
-        AddMultipleEqualityPredicate(thd, companion_collection, item_equal,
-                                     &left_field, left_table_idx, &right_field,
-                                     right_table_idx, selectivity, graph);
+        AddMultipleEqualityPredicate(thd, companion_collection, item_equal, // 1、如果 right_node_idx 和 left_node_idx 在超图中是否已经存在边，则查找对应的 RelationalExpression，查看 join_conditions、equijoin_conditions，检查是否有 Item_eq_base 属于 Item_equal，如果有则返回，如果没就重新计算 对应的 graph->edges 的 selectivity
+                                     &left_field, left_table_idx, &right_field, // 2、如果 right_node_idx 和 left_node_idx 在超图中不存在对应的边，则构建新的 JoinPredicate 放入 graph->edges
+                                     right_table_idx, selectivity, graph);  // 最后构建新的 Item_func_eq，然后放入 expr->equijoin_conditions、对应的 graph->nodes 的 join_conditions_pushable_to_this
       }
     }
   }
@@ -3336,7 +3339,7 @@ void CompleteFullMeshForMultipleEqualities(
   Returns a map of all tables that are on the inner side of some outer join or
   antijoin.
  */
-table_map GetTablesInnerToOuterJoinOrAntiJoin(
+table_map GetTablesInnerToOuterJoinOrAntiJoin(  // 获取 expr 的 LEFT_JOIN 或者 ANTIJOIN 的内表
     const RelationalExpression *expr) {
   switch (expr->type) {
     case RelationalExpression::INNER_JOIN:
@@ -3366,12 +3369,12 @@ table_map GetTablesInnerToOuterJoinOrAntiJoin(
   multiple equalities that do not have an already known value, as such
   equalities should be eliminated by constant folding instead of being expanded.
  */
-bool ExpandMultipleEqualsForSingleTable(Item_equal *equal,
+bool ExpandMultipleEqualsForSingleTable(Item_equal *equal,  // 把 Item_equal 拆成 Item_func_e 数组，1、如果有常量，则遍历它的每个字段，构造 Item_func_eq 存放到 conditions 数组， 2、每个字段都跟第一个字段组成 Item_func_e，然后存放到 conditions 数组
                                         Mem_root_array<Item *> *conditions) {
   assert(!equal->const_item());
   assert(has_single_bit(equal->used_tables() & ~PSEUDO_TABLE_BITS));
   Item *const_arg = equal->const_arg();
-  if (const_arg != nullptr) {
+  if (const_arg != nullptr) { // 如果 Item_equal 有常量，则遍历它的每个字段，构造 Item_func_eq 存放到 conditions 数组
     for (Item_field &field : equal->get_fields()) {
       if (conditions->push_back(MakeEqItem(&field, const_arg, equal))) {
         return true;
@@ -3379,7 +3382,7 @@ bool ExpandMultipleEqualsForSingleTable(Item_equal *equal,
     }
   } else {
     Item_field *prev = nullptr;
-    for (Item_field &field : equal->get_fields()) {
+    for (Item_field &field : equal->get_fields()) { // 每个字段都跟第一个字段组成 Item_func_e，然后存放到 conditions 数组
       if (prev != nullptr) {
         if (conditions->push_back(MakeEqItem(prev, &field, equal))) {
           return true;
@@ -3399,36 +3402,36 @@ bool ExpandMultipleEqualsForSingleTable(Item_equal *equal,
  */
 bool ExtractWhereConditionsForSingleTable(THD *thd, Item *condition,
                                           Mem_root_array<Item *> *conditions,
-                                          bool *where_is_always_false) {
+                                          bool *where_is_always_false) {  // 递归遍历 condition 中的每一个 AND 项，1、如果是 Item_equal 类型且有常量，则把 condition 放到 conditions 数组中 2、如果是 Item_equal 类型且没有常量，则把 Item_equal 拆成 Item_func_e 数组 3、// 如果不是 Item_equal 类型，则递归遍历 cond 中的每个一 AND 项目，然后存放到 condition_parts（在这里是 conditions）数组中
   bool need_normalization = false;
-  if (WalkConjunction(condition, [conditions, &need_normalization](Item *cond) {
-        if (IsMultipleEquals(cond)) {
+  if (WalkConjunction(condition, [conditions, &need_normalization](Item *cond) {  // 递归遍历 condition 中的每一个 AND 项，然后执行 func(condition)
+        if (IsMultipleEquals(cond)) { // 如果是 Item_equal 类型
           Item_equal *equal = down_cast<Item_equal *>(cond);
-          if (equal->const_item()) {
+          if (equal->const_item()) { // 如果里面有常量，把 condition 放到 conditions 数组中
             // This equality is known to evaluate to a constant value. Don't
             // expand it, but rather let constant folding remove it. Flag that
             // normalization is needed, so that constant folding kicks in.
             need_normalization = true;
             return conditions->push_back(equal);
-          } else {
+          } else {  // 如果没有常量，则把 Item_equal 拆成 Item_func_e 数组
             // Expand the multiple equality. Normalization does not do anything
             // useful if all conditions are multiple equalities.
             return ExpandMultipleEqualsForSingleTable(equal, conditions);
           }
-        } else {
+        } else {// 如果不是 Item_equal 类型
           // Some other kind of condition. We might be able to simplify it in
           // normalization, so flag that we need normalization.
           need_normalization = true;
-          return ExtractConditions(
-              EarlyExpandMultipleEquals(cond, TablesBetween(0, MAX_TABLES)),
-              conditions);
+          return ExtractConditions( // 递归遍历 cond 中的每个一 AND 项目，然后存放到 condition_parts（在这里是 conditions）数组中
+              EarlyExpandMultipleEquals(cond, TablesBetween(0, MAX_TABLES)), // 在 join 下推前展开 multiple equalities，返回 AND conjunction。1、标量处理，2、常量处理（每个字段填充常量），3、涉及表个数大于2的处理（提取公共表），4、涉及表个数等于2的处理（获取 Item_func_eq）
+              conditions);                                                   // EarlyExpandMultipleEquals 只处理 Item_equal 类型的 Item，否则直接返回原 Item，那么这里什么都不做
         }
       })) {
     return true;
   }
 
   if (need_normalization) {
-    if (EarlyNormalizeConditions(thd, /*join=*/nullptr, conditions,
+    if (EarlyNormalizeConditions(thd, /*join=*/nullptr, conditions, // 总体思想是：消除多余的过滤条件 1、共同子表达式进行消除 2、移除常量和 eq items，结果放在 res 中，然后检查 res 是 Item::COND_TRUE 还是 Item::COND_FALSE
                                  where_is_always_false)) {
       return true;
     }
@@ -3439,8 +3442,8 @@ bool ExtractWhereConditionsForSingleTable(THD *thd, Item *condition,
 
 /// Fast path for MakeJoinHypergraph() when the query accesses a single table or
 /// no table.
-bool MakeSingleTableHypergraph(THD *thd, const Query_block *query_block,
-                               string *trace, JoinHypergraph *graph,
+bool MakeSingleTableHypergraph(THD *thd, const Query_block *query_block,  // 1、从 query_block 中获取 leaf_tables，然后转换成 RelationalExpression，然后构建 JoinHypergraph
+                               string *trace, JoinHypergraph *graph,  // 2、从 query_block 获取 <Item*>join->where_cond，然后把它转换成数组，然后遍历这个数组，生成 Predicate，然后添加进 JoinHypergraph 的 predicates
                                bool *where_is_always_false) {
   RelationalExpression *root = nullptr;
   if (Table_ref *const table_ref = query_block->leaf_tables;
@@ -3451,26 +3454,26 @@ bool MakeSingleTableHypergraph(THD *thd, const Query_block *query_block,
       table_ref->table->file->print_error(error, MYF(0));
       return true;
     }
-    root = MakeRelationalExpression(thd, table_ref);
-    MakeJoinGraphFromRelationalExpression(thd, root, trace, graph);
+    root = MakeRelationalExpression(thd, table_ref); // 根据 Table_ref 设置 RelationalExpression 的 type、table、tables_in_subtree，给 join_conditions_pushable_to_this 分配空间
+    MakeJoinGraphFromRelationalExpression(thd, root, trace, graph);  // 1、如果 RelationalExpression 是表，则更新 JoinHypergraph 的 graph、nodes、table_num_to_node_num，然后更新 RelationalExpression 的 nodes_in_subtree，然后返回
   }
 
   if (Item *const where_cond = query_block->join->where_cond;
       where_cond != nullptr) {
     Mem_root_array<Item *> where_conditions(thd->mem_root);
     if (ExtractWhereConditionsForSingleTable(thd, where_cond, &where_conditions,
-                                             where_is_always_false)) {
+                                             where_is_always_false)) {  // 递归遍历 condition 中的每一个 AND 项，1、如果是 Item_equal 类型且有常量，则把 condition 放到 conditions 数组中 2、如果是 Item_equal 类型且没有常量，则把 Item_equal 拆成 Item_func_e 数组 3、// 如果不是 Item_equal 类型，则递归遍历 cond 中的每个一 AND 项目，然后存放到 condition_parts（在这里是 conditions）数组中
       return true;
     }
 
-    for (Item *item : where_conditions) {
-      AddPredicate(thd, item, /*was_join_condition=*/false,
+    for (Item *item : where_conditions) { // 遍历 where_conditions 数组
+      AddPredicate(thd, item, /*was_join_condition=*/false,  // 把这个函数的参数初始化 Predicate 谓词，然后把这个谓词加入 JoinHypergraph 的 predicates。计算它的 condition、used_nodes、total_eligibility_set、selectivity、was_join_condition、source_multiple_equality_idx、functional_dependencies_idx、contained_subqueries，然后放到 graph->predicates 中
                    /*source_multiple_equality_idx=*/-1, root,
                    /*companion_collection=*/nullptr, graph, trace);
     }
     graph->num_where_predicates = graph->predicates.size();
 
-    SortPredicates(graph->predicates.begin(), graph->predicates.end());
+    SortPredicates(graph->predicates.begin(), graph->predicates.end()); // 重新排序谓语，把最常用、代价最低的谓词放前面，把谓词有子查询放后面，把存储过程和 UDFs 放最后面
   }
 
   if (trace != nullptr) {
@@ -3500,22 +3503,22 @@ bool MakeJoinHypergraph(THD *thd, string *trace, JoinHypergraph *graph,
 
   const size_t num_tables = query_block->leaf_table_count;
   if (graph->nodes.reserve(num_tables) ||
-      graph->graph.nodes.reserve(num_tables)) {
+      graph->graph.nodes.reserve(num_tables)) { // 给分 graph->nodes、graph->graph.nodes 配存储空间
     return true;
   }
 
   // Fast path for single-table queries. We can skip all the logic that analyzes
   // join conditions, as there is no join.
-  if (num_tables <= 1) {
+  if (num_tables <= 1) {  // 如果是单表
     return MakeSingleTableHypergraph(thd, query_block, trace, graph,
                                      where_is_always_false);
   }
 
-  RelationalExpression *root =
-      MakeRelationalExpressionFromJoinList(thd, query_block->m_table_nest);
+  RelationalExpression *root =  // 后续遍历 join_list，1、如果是 sj 或者 aj，则递归 2、如果不是 sj 或者 aj，则直接生成 RelationalExpression 3、拿到优化后的 <Item *> Table_ref->m_join_cond_optim，如果是 multiple equalities，则 3.1、标量处理，3.2、常量处理（每个字段填充常量），3.3、涉及表个数大于2的处理（提取公共表），3.4、涉及表个数等于2的处理（获取 Item_func_eq）
+      MakeRelationalExpressionFromJoinList(thd, query_block->m_table_nest); // 递归遍历 join_cond 中的每个一 AND 项目，然后存放到 Mem_root_array<Item *> join->join_conditions 数组中，消除多余的过滤条件，重排序 Mem_root_array<Item *> 数组
 
   CompanionSetCollection companion_collection(thd, root);
-  FlattenInnerJoins(root);
+  FlattenInnerJoins(root);  // 如果 RelationalExpression 符合转换成 MULTI_INNER_JOIN 要求，那么查看它左右孩子，如果也是 MULTI_INNER_JOIN，那么合并成一个更大的 MULTI_INNER_JOIN
 
   const JOIN *join = query_block->join;
   if (trace != nullptr) {
@@ -3534,7 +3537,7 @@ bool MakeJoinHypergraph(THD *thd, string *trace, JoinHypergraph *graph,
 
   Mem_root_array<Item *> table_filters(thd->mem_root);
   Mem_root_array<Item *> cycle_inducing_edges(thd->mem_root);
-  PushDownJoinConditions(thd, root, companion_collection, &table_filters,
+  PushDownJoinConditions(thd, root, companion_collection, &table_filters, // 把整个 expr->join_conditions 下推，递归 expr->left、expr->right 或者 expr->multi_children
                          &cycle_inducing_edges, trace);
 
   // Split up WHERE conditions, and push them down into the tree as much as
@@ -3545,26 +3548,26 @@ bool MakeJoinHypergraph(THD *thd, string *trace, JoinHypergraph *graph,
   // them later.
   Mem_root_array<Item *> where_conditions(thd->mem_root);
   if (join->where_cond != nullptr) {
-    Item *where_cond = EarlyExpandMultipleEquals(join->where_cond,
+    Item *where_cond = EarlyExpandMultipleEquals(join->where_cond, // 在 join 下推前展开 multiple equalities，返回 AND conjunction。1、标量处理，2、常量处理（每个字段填充常量），3、涉及表个数大于2的处理（提取公共表），4、涉及表个数等于2的处理（获取 Item_func_eq）
                                                  /*tables_in_subtree=*/~0);
-    if (ExtractConditions(where_cond, &where_conditions)) {
+    if (ExtractConditions(where_cond, &where_conditions)) { // 递归遍历 condition 中的每个一 AND 项目，然后存放到 condition_parts 数组中
       return true;
     }
-    if (EarlyNormalizeConditions(thd, /*join=*/nullptr, &where_conditions,
+    if (EarlyNormalizeConditions(thd, /*join=*/nullptr, &where_conditions,  // 总体思想是：消除多余的过滤条件
                                  where_is_always_false)) {
       return true;
     }
-    ReorderConditions(&where_conditions);
-    where_conditions = PushDownAsMuchAsPossible(
+    ReorderConditions(&where_conditions); // 重排序 Mem_root_array<Item *> 数组。因为之前的 optimize_cond() 会导致 equalities 放在数组后面。我们最好把 equalities 调整到数组前面。
+    where_conditions = PushDownAsMuchAsPossible(   // 遍历 conditions 数组，尽可能地把迭代器下推
         thd, std::move(where_conditions), root,
         /*is_join_condition_for_expr=*/false, companion_collection,
         &table_filters, &cycle_inducing_edges, trace);
 
     // We're done pushing, so unflatten so that the rest of the algorithms
     // don't need to worry about it.
-    UnflattenInnerJoins(root);
+    UnflattenInnerJoins(root);  // 把 RelationalExpression 展开成 右深二叉树
 
-    if (CanonicalizeConditions(thd, GetVisibleTables(root),
+    if (CanonicalizeConditions(thd, GetVisibleTables(root), // 规范化 Conditions：把 (A.x, B.x, D.x, E.x)、allowed_tables={A,B,C,D} 转换成  A.x = B.x and B.x = D.x (E.x is ignored). 然后重新拆分 conditions 成新的数组，比如前面的例子拆成 A.x = B.x 和 B.x = D.x
                                TablesBetween(0, MAX_TABLES),
                                &where_conditions)) {
       return true;
@@ -3577,23 +3580,23 @@ bool MakeJoinHypergraph(THD *thd, string *trace, JoinHypergraph *graph,
   } else {
     // We're done pushing, so unflatten so that the rest of the algorithms
     // don't need to worry about it.
-    UnflattenInnerJoins(root);
+    UnflattenInnerJoins(root);  // 把 RelationalExpression 展开成 右深二叉树
   }
 
   // Now that everything is pushed, we can concretize any multiple equalities
   // that are left on antijoins and semijoins.
-  LateConcretizeMultipleEqualities(thd, root);
+  LateConcretizeMultipleEqualities(thd, root); // 从 MultipleEqualities 找到一条边连接 expr->left、expr->right
 
   // Now see if we can push down join conditions to sargable predicates.
   // We do this after we're done pushing, since pushing can change predicates
   // (in particular, it can concretize multiple equalities).
-  PushDownJoinConditionsForSargable(thd, root);
+  PushDownJoinConditionsForSargable(thd, root); // 遍历  expr->join_conditions，尝试下推条件（类似 PushDownCondition()）放到 expr->join_conditions_pushable_to_this。然后递归 expr->left、expr->right
 
-  if (CanonicalizeJoinConditions(thd, root)) {
+  if (CanonicalizeJoinConditions(thd, root)) { // 规范化 JoinConditions：先规范化 expr->join_conditions，然后遍历 expr->join_conditions，不处理里面的子查询、标量。最后递归规范化 expr->left 和 expr->right
     return true;
   }
-  FindConditionsUsedTables(thd, root);
-  MakeHashJoinConditions(thd, root);
+  FindConditionsUsedTables(thd, root); // 对 expr->conditions_used_tables 赋值，然后递归
+  MakeHashJoinConditions(thd, root); // 在 expr->join_conditions 中查找符合 hash join 条件的 item，然后添加到 expr->equijoin_conditions 中，接着在 expr->join_conditions 中删除
 
   if (trace != nullptr) {
     *trace += StringPrintf(
@@ -3612,7 +3615,7 @@ bool MakeJoinHypergraph(THD *thd, string *trace, JoinHypergraph *graph,
   // ha_archive, though.)
   for (Table_ref *tl = graph->query_block()->leaf_tables; tl != nullptr;
        tl = tl->next_leaf) {
-    if (const int error = tl->fetch_number_of_rows(kRowEstimateFallback);
+    if (const int error = tl->fetch_number_of_rows(kRowEstimateFallback);  // 获取表中的行数
         error) {
       tl->table->file->print_error(error, MYF(0));
       return true;
@@ -3620,18 +3623,18 @@ bool MakeJoinHypergraph(THD *thd, string *trace, JoinHypergraph *graph,
   }
 
   // Build sets of equal fields in each CompanionSet.
-  ForEachOperator(root, [&](RelationalExpression *expr) {
+  ForEachOperator(root, [&](RelationalExpression *expr) {  // 遍历 RelationalExpression 的 expr->left、expr->right 。然后LAMBDA函数中 遍历 expr->join_conditions_pushable_to_this 、expr->equijoin_conditions，更新 expr->companion_set
     if (expr->type == RelationalExpression::TABLE) {
       for (const Item *condition : expr->join_conditions_pushable_to_this) {
-        if (is_function_of_type(condition, Item_func::EQ_FUNC)) {
-          expr->companion_set->AddEquijoinCondition(
+        if (is_function_of_type(condition, Item_func::EQ_FUNC)) { // 如果是 = 等式
+          expr->companion_set->AddEquijoinCondition(  // 更新 expr->companion_set
               thd, down_cast<const Item_func_eq &>(*condition));
         }
       }
     } else {
       for (const Item_eq_base *condition : expr->equijoin_conditions) {
-        if (condition->functype() == Item_func::EQ_FUNC) {
-          expr->companion_set->AddEquijoinCondition(
+        if (condition->functype() == Item_func::EQ_FUNC) { // 如果是 = 等式
+          expr->companion_set->AddEquijoinCondition(  // 更新 expr->companion_set
               thd, down_cast<const Item_func_eq &>(*condition));
         }
       }
@@ -3647,19 +3650,19 @@ bool MakeJoinHypergraph(THD *thd, string *trace, JoinHypergraph *graph,
   std::fill(begin(graph->table_num_to_node_num),
             end(graph->table_num_to_node_num), -1);
 #endif
-  MakeJoinGraphFromRelationalExpression(thd, root, trace, graph);
+  MakeJoinGraphFromRelationalExpression(thd, root, trace, graph);  // 1、如果 RelationalExpression 是表，则更新 JoinHypergraph 的 graph、nodes、table_num_to_node_num，然后更新 RelationalExpression 的 nodes_in_subtree，然后返回    // 2、如果不是表，则递归处理它的 left 和 right，然后更新它的 nodes_in_subtree、给 expr->conflict_rules 计算并赋值、graph->graph 添加新的边、计算 expr 的 selectivity，最后构建新的 JoinPredicate 放入 graph->edges
 
   // Now that we have the hypergraph construction done, it no longer hurts
   // to remove impossible conditions.
-  ClearImpossibleJoinConditions(root);
+  ClearImpossibleJoinConditions(root);  // 遍历 expr->equijoin_conditions，如果发现它涉及的表只返回零行或者只返回 NULL 行，那么清空 expr->equijoin_conditions。继续递归 expr->left 和 expr->right
 
   graph->tables_inner_to_outer_or_anti =
-      GetTablesInnerToOuterJoinOrAntiJoin(root);
+      GetTablesInnerToOuterJoinOrAntiJoin(root);  // 获取 expr 的 LEFT_JOIN 或者 ANTIJOIN 的内表
 
   // Add cycles.
   size_t old_graph_edges = graph->graph.edges.size();
   if (!cycle_inducing_edges.empty()) {
-    AddCycleEdges(thd, cycle_inducing_edges, companion_collection, graph,
+    AddCycleEdges(thd, cycle_inducing_edges, companion_collection, graph, // 遍历 cycle_inducing_edges 中的 Item，如果在 JoinHypergraph 的 edges 没找到对应的边，则构建新的 JoinPredicate 并添加到 JoinHypergraph 的 edges。如果找到对应的边，则更新它的 selectivity。 最后 JoinHypergraph 的对应 nodes 的 join_conditions_pushable_to_this 添加 cond，形成回环。
                   trace);
   }
   // Now that all trivial conditions have been removed and all equijoin
@@ -3667,22 +3670,22 @@ bool MakeJoinHypergraph(THD *thd, string *trace, JoinHypergraph *graph,
   // equalities that are in actual use, and present as part of the base
   // conjunctions (ie., not OR-ed with anything).
   Mem_root_array<Item_equal *> multiple_equalities(thd->mem_root);
-  ExtractCycleMultipleEqualitiesFromJoinConditions(root, companion_collection,
+  ExtractCycleMultipleEqualitiesFromJoinConditions(root, companion_collection,  // 遍历 expr->equijoin_conditions，如果迭代器 source_multiple_equality 不为空，且它满足全连接，则把 迭代器的 source_multiple_equality 放入  multiple_equalities 数组
                                                    &multiple_equalities);
-  ExtractCycleMultipleEqualities(where_conditions, companion_collection,
+  ExtractCycleMultipleEqualities(where_conditions, companion_collection,  // 遍历 conditions 数组，如果是 = 等式，且迭代器的 source_multiple_equality 是全连接，则把该 source_multiple_equality 放进 multiple_equalities 数组
                                  &multiple_equalities);
-  if (multiple_equalities.size() > 64) {
+  if (multiple_equalities.size() > 64) {  // multiple_equalities 不能超过 64 个元素
     multiple_equalities.resize(64);
   }
   std::sort(multiple_equalities.begin(), multiple_equalities.end());
   multiple_equalities.erase(
       std::unique(multiple_equalities.begin(), multiple_equalities.end()),
       multiple_equalities.end());
-  CompleteFullMeshForMultipleEqualities(thd, multiple_equalities,
-                                        companion_collection, graph, trace);
+  CompleteFullMeshForMultipleEqualities(thd, multiple_equalities, // 遍历 multiple_equalities 数组，对其中的每个元素的 multiple equality 全连接的关系，执行 AddMultipleEqualityPredicate
+                                        companion_collection, graph, trace);  // AddMultipleEqualityPredicate 功能：1、如果 right_node_idx 和 left_node_idx 在超图中是否已经存在边，则查找对应的 RelationalExpression，查看 join_conditions、equijoin_conditions，检查是否有 Item_eq_base 属于 Item_equal，如果有则返回，如果没就重新计算 对应的 graph->edges 的 selectivity  2、如果 right_node_idx 和 left_node_idx 在超图中不存在对应的边，则构建新的 JoinPredicate 放入 graph->edges  3、最后构建新的 Item_func_eq，然后放入 expr->equijoin_conditions 对应的 graph->nodes 的 join_conditions_pushable_to_this
   if (graph->graph.edges.size() != old_graph_edges) {
     // We added at least one cycle-inducing edge.
-    PromoteCycleJoinPredicates(thd, root, multiple_equalities,
+    PromoteCycleJoinPredicates(thd, root, multiple_equalities, // 遍历 JoinHypergraph 的 edges，如果它有回环，则把 graph->edges[edge_idx / 2].expr 的 equijoin_conditions、join_conditions 添加到 JoinHypergraph 的 predicates
                                companion_collection, graph, trace);
   }
 
@@ -3724,17 +3727,17 @@ bool MakeJoinHypergraph(THD *thd, string *trace, JoinHypergraph *graph,
 
   // Find TES and selectivity for each WHERE predicate that was not pushed
   // down earlier.
-  for (Item *condition : where_conditions) {
-    AddPredicate(thd, condition, /*was_join_condition=*/false,
+  for (Item *condition : where_conditions) {  // 遍历 where_conditions (来自 query_block->join->where_cond 的加工)
+    AddPredicate(thd, condition, /*was_join_condition=*/false,  // 把这个函数的参数初始化 Predicate 谓词，然后把这个谓词加入 JoinHypergraph 的 predicates。计算它的 condition、used_nodes、total_eligibility_set、selectivity、was_join_condition、source_multiple_equality_idx、functional_dependencies_idx、contained_subqueries，然后放到 graph->predicates 中
                  /*source_multiple_equality_idx=*/-1, root,
                  &companion_collection, graph, trace);
   }
 
   // Table filters should be applied at the bottom, without extending the TES.
-  for (Item *condition : table_filters) {
+  for (Item *condition : table_filters) { // 把之前收集的 table_filters 加入 JoinHypergraph 的 predicates
     Predicate pred;
     pred.condition = condition;
-    pred.used_nodes = pred.total_eligibility_set = GetNodeMapFromTableMap(
+    pred.used_nodes = pred.total_eligibility_set = GetNodeMapFromTableMap( // 根据 table_num 获取 node_num
         condition->used_tables() & ~(INNER_TABLE_BIT | OUTER_REF_TABLE_BIT),
         graph->table_num_to_node_num);
     assert(has_single_bit(pred.total_eligibility_set));
@@ -3762,7 +3765,7 @@ bool MakeJoinHypergraph(THD *thd, string *trace, JoinHypergraph *graph,
 // Returns the tables in this subtree that are visible higher up in
 // the join tree. This includes all tables in this subtree, except
 // those that are on the inner side of a semijoin or an antijoin.
-table_map GetVisibleTables(const RelationalExpression *expr) {
+table_map GetVisibleTables(const RelationalExpression *expr) {  // SEMIJOIN、ANTIJOIN 返回左边 RelationalExpression 的 tables_in_subtree，其他返回 左右两边 RelationalExpression 的 tables_in_subtree
   switch (expr->type) {
     case RelationalExpression::TABLE:
       return expr->tables_in_subtree;

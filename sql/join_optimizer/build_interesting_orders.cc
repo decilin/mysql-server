@@ -258,7 +258,7 @@ static void CollectFunctionalDependenciesFromUniqueIndexes(
   }
 }
 
-static size_t CountOrderElements(const ORDER *order) {
+static size_t CountOrderElements(const ORDER *order) {  // 计算 order 中多少个项
   size_t count = 0;
   for (const ORDER *ptr = order; ptr != nullptr; ptr = ptr->next) {
     ++count;

@@ -1773,23 +1773,23 @@ bool Query_expression::ExecuteIteratorQuery(THD *thd) {
 
     PFSBatchMode pfs_batch_mode(m_root_iterator.get());
 
-    for (;;) {
+    for (;;) {  // 退出场景：1、读取异常 2、被 kill 3、读取完成，即 error 为 -1 4、发送数据失败
       int error = m_root_iterator->Read();
-      DBUG_EXECUTE_IF("bug13822652_1", thd->killed = THD::KILL_QUERY;);
+      DBUG_EXECUTE_IF("bug13822652_1", thd->killed = THD::KILL_QUERY;);   // 返回 1 为 异常，-1 为读取完成, 0 为读取到正常数据
 
-      if (error > 0 || thd->is_error())  // Fatal error
+      if (error > 0 || thd->is_error())  // Fatal error // 如果异常
         return true;
-      else if (error < 0)
+      else if (error < 0) // 如果读取完成
         break;
-      else if (thd->killed)  // Aborted by user
+      else if (thd->killed)  // Aborted by user // 如果 THD 被 kill
       {
         thd->send_kill_message();
         return true;
       }
 
-      ++*send_records_ptr;
+      ++*send_records_ptr;  // 发送记录数 + 1
 
-      if (query_result->send_data(thd, *fields)) {
+      if (query_result->send_data(thd, *fields)) {  // 给 Query_result 发送一条记录
         return true;
       }
       thd->get_stmt_da()->inc_current_row_for_condition();
@@ -1801,7 +1801,7 @@ bool Query_expression::ExecuteIteratorQuery(THD *thd) {
 
   thd->current_found_rows = *send_records_ptr;
 
-  return query_result->send_eof(thd);
+  return query_result->send_eof(thd);  // 给 Query_result 结束标记
 }
 
 /**

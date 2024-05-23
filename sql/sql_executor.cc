@@ -704,7 +704,7 @@ bool set_record_buffer(TABLE *table, double expected_rows_to_fetch) {
   return false;
 }
 
-bool ExtractConditions(Item *condition,
+bool ExtractConditions(Item *condition, // 递归遍历 condition 中的每个一 AND 项目，然后存放到 condition_parts 数组中
                        Mem_root_array<Item *> *condition_parts) {
   return WalkConjunction(condition, [condition_parts](Item *item) {
     return condition_parts->push_back(item);
@@ -732,7 +732,7 @@ static bool ContainsAnyMRRPaths(AccessPath *path) {
   return any_mrr_paths;
 }
 
-Item *CreateConjunction(List<Item> *items) {
+Item *CreateConjunction(List<Item> *items) {  // 把 items 转换成 Item_cond_and
   if (items->size() == 0) {
     return nullptr;
   }

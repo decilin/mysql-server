@@ -266,6 +266,8 @@ class CostingReceiver {
     return access_paths;
   }
 
+  NO_INLINE std::vector<NodeMap> fuck_get_first_list() const ;
+
   int subgraph_pair_limit() const { return m_subgraph_pair_limit; }
 
   /// True if the result of the join is found to be always empty, typically
@@ -301,8 +303,8 @@ class CostingReceiver {
     due to the use of a union.
    */
   struct AccessPathSet {
-    Prealloced_array<AccessPath *, 4> paths;
-    FunctionalDependencySet active_functional_dependencies{0};
+    Prealloced_array<AccessPath *, 4> paths;  // 给 AccessPath * 申请 4 个 bytes 的空间，如果在 64 位平台上可以节约空间
+    FunctionalDependencySet active_functional_dependencies{0};  // 底层的类型是 std::bitset<kMaxSupportedFDs>
 
     // Once-interesting orderings that we don't care about anymore,
     // e.g. because they were interesting for a semijoin but that semijoin
@@ -315,12 +317,14 @@ class CostingReceiver {
     // relevant ones are semijoin orderings (which are never identical,
     // and never merged with the relevant-at-end orderings), this
     // should not happen.
-    OrderingSet obsolete_orderings{0};
+    OrderingSet obsolete_orderings{0};  // 底层的类型是 std::bitset<kMaxSupportedOrderings>;
 
     // True if the join of the tables in this set has been found to be always
     // empty (typically because of an impossible WHERE clause).
     bool always_empty{false};
   };
+
+  NO_INLINE AccessPathSet fuck_get_AccessPathSet(NodeMap idx) const ;
 
   /**
     For each subset of tables that are connected in the join hypergraph,
@@ -332,7 +336,7 @@ class CostingReceiver {
     (in HasSeen()); if there's an entry here, that subset will induce
     a connected subgraph of the join hypergraph.
    */
-  mem_root_unordered_map<NodeMap, AccessPathSet> m_access_paths;
+  mem_root_unordered_map<NodeMap, AccessPathSet> m_access_paths;  // 动态规划中的临时值
 
   /**
     How many subgraph pairs we've seen so far. Used to give up
@@ -705,6 +709,24 @@ bool IsUpdateStatement(const THD *thd) {
   return thd->lex->sql_command == SQLCOM_UPDATE ||
          thd->lex->sql_command == SQLCOM_UPDATE_MULTI;
 }
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
+NO_INLINE std::vector<NodeMap> CostingReceiver::fuck_get_first_list() const {
+    std::vector<NodeMap> vec = {};
+    for (const auto &[nodes, pathset] : m_access_paths) {
+      vec.push_back(nodes);
+    }
+    return vec;
+}
+
+NO_INLINE CostingReceiver::AccessPathSet CostingReceiver::fuck_get_AccessPathSet(NodeMap idx) const {
+    std::vector<NodeMap> vec = {};
+    auto it = m_access_paths.find(idx);
+    assert(it != m_access_paths.end());
+    return it->second;
+}
+#pragma GCC diagnostic pop
 
 void CostingReceiver::TraceAccessPaths(NodeMap nodes) {
   auto it = m_access_paths.find(nodes);
@@ -3630,14 +3652,14 @@ NodeMap FindReachableTablesFrom(NodeMap tables, const JoinHypergraph &graph) {
   const Mem_root_array<Hyperedge> &edges = graph.graph.edges;
 
   NodeMap reachable = 0;
-  for (int node_idx : BitsSetIn(tables)) {
+  for (int node_idx : BitsSetIn(tables)) {  // 遍历 tables 中的每一个二进制位
     for (int neighbor_idx :
-         BitsSetIn(nodes[node_idx].simple_neighborhood & ~reachable)) {
+         BitsSetIn(nodes[node_idx].simple_neighborhood & ~reachable)) { // 遍历它的非超点邻居，过滤掉 reachable 中的点
       if (LateralDependenciesAreSatisfied(neighbor_idx, tables, graph)) {
         reachable |= TableBitmap(neighbor_idx);
       }
     }
-    for (int edge_idx : nodes[node_idx].complex_edges) {
+    for (int edge_idx : nodes[node_idx].complex_edges) { // 遍历它的超点邻居
       if (IsSubset(edges[edge_idx].left, tables)) {
         NodeMap others = edges[edge_idx].right & ~tables;
         if (has_single_bit(others) && !Overlaps(others, reachable) &&
@@ -3872,12 +3894,12 @@ bool CostingReceiver::FoundSubgraphPair(NodeMap left, NodeMap right,
   assert(right != 0);
   assert((left & right) == 0);
 
-  const JoinPredicate *edge = &m_graph->edges[edge_idx];
-  if (!PassesConflictRules(left | right, edge->expr)) {
+  const JoinPredicate *edge = &m_graph->edges[edge_idx];  // 根据函数参数 edge_idx 获取对应的 JoinPredicate
+  if (!PassesConflictRules(left | right, edge->expr)) { // 查看是否为违背 CD-C 冲突规则
     return false;
   }
 
-  bool is_commutative = OperatorIsCommutative(*edge->expr);
+  bool is_commutative = OperatorIsCommutative(*edge->expr); // 是否满足交换律
 
   // If we have an equi-semijoin, and the inner side is deduplicated
   // on the group given by the join predicates, we can rewrite it to an
@@ -3889,7 +3911,7 @@ bool CostingReceiver::FoundSubgraphPair(NodeMap left, NodeMap right,
   //
   // See the comment on OperatorsAreAssociative() for why we don't
   // also need to change the rules about associativity or l-asscom.
-  bool can_rewrite_semi_to_inner =
+  bool can_rewrite_semi_to_inner =  // 如果 SEMIJOIN 的 inner side 的记录没有重复，则可以把该 SEMIJOIN 转换成 INNER JOIN
       edge->expr->type == RelationalExpression::SEMIJOIN &&
       edge->ordering_idx_needed_for_semijoin_rewrite != -1;
 
@@ -3909,9 +3931,9 @@ bool CostingReceiver::FoundSubgraphPair(NodeMap left, NodeMap right,
     can_rewrite_semi_to_inner = false;
   }
 
-  auto left_it = m_access_paths.find(left);
+  auto left_it = m_access_paths.find(left); // 根据函数的参数 NodeMap left 查找对应的 AccessPathSet
   assert(left_it != m_access_paths.end());
-  auto right_it = m_access_paths.find(right);
+  auto right_it = m_access_paths.find(right); // 根据函数的参数 NodeMap right 查找对应的 AccessPathSet
   assert(right_it != m_access_paths.end());
 
   const FunctionalDependencySet new_fd_set =
@@ -3933,7 +3955,7 @@ bool CostingReceiver::FoundSubgraphPair(NodeMap left, NodeMap right,
   // path, in case a join higher up in the join tree needs to know which tables
   // are pruned away (typically for null-complementing in outer joins).
   const bool always_empty =
-      IsEmptyJoin(edge->expr->type, left_it->second.always_empty,
+      IsEmptyJoin(edge->expr->type, left_it->second.always_empty, // 判断返回值是否为空
                   right_it->second.always_empty);
 
   // If the join is known to produce an empty result, and will be replaced by a
@@ -3948,12 +3970,12 @@ bool CostingReceiver::FoundSubgraphPair(NodeMap left, NodeMap right,
 
   bool wrote_trace = false;
 
-  const NodeMap left_reachable = FindReachableTablesFrom(left, *m_graph);
-  const NodeMap right_reachable = FindReachableTablesFrom(right, *m_graph);
-  for (AccessPath *right_path : right_it->second.paths) {
+  const NodeMap left_reachable = FindReachableTablesFrom(left, *m_graph); // 查找 left 的直接邻居点
+  const NodeMap right_reachable = FindReachableTablesFrom(right, *m_graph); // 查找 right 的直接邻居点
+  for (AccessPath *right_path : right_it->second.paths) { // 遍历右子图
     assert(BitsetsAreCommitted(right_path));
     if (edge->expr->join_conditions_reject_all_rows &&
-        edge->expr->type != RelationalExpression::FULL_OUTER_JOIN) {
+        edge->expr->type != RelationalExpression::FULL_OUTER_JOIN) {  // 如果不是 FULL_OUTER_JOIN 且连接条件拒绝所有行,则创建 NewZeroRowsAccessPath
       // If the join condition can never be true, we also don't need to read the
       // right side. For inner joins and semijoins, we can actually just skip
       // reading the left side as well, but if so, the join condition would
@@ -3973,7 +3995,7 @@ bool CostingReceiver::FoundSubgraphPair(NodeMap left, NodeMap right,
       zero_path->delayed_predicates = right_path->delayed_predicates;
       right_path = zero_path;
     }
-    for (AccessPath *left_path : left_it->second.paths) {
+    for (AccessPath *left_path : left_it->second.paths) { // （left_it->second.paths 是据函数的参数 NodeMap left 查找对应的 AccessPathSet），遍历它的所有 AccessPath，然后分别提议 HashJoin、NestedLoopJoin
       if (DisallowParameterizedJoinPath(left_path, right_path, left, right,
                                         left_reachable, right_reachable)) {
         continue;
@@ -4033,7 +4055,7 @@ bool CostingReceiver::FoundSubgraphPair(NodeMap left, NodeMap right,
     }
   }
 
-  if (always_empty) {
+  if (always_empty) { // 如果返回空，则创建 NewZeroRowsAccessPath，
     m_secondary_engine_cost_hook = saved_cost_hook;
     const auto it = m_access_paths.find(left | right);
     if (it != m_access_paths.end() && !it->second.paths.empty() &&
@@ -4169,7 +4191,7 @@ void CostingReceiver::ProposeHashJoin(
   // carefully when relational expressions are created and forcing only NLJ's
   // for such cases.
   if (edge->expr->type == RelationalExpression::LEFT_JOIN &&
-      edge->expr->right->type == RelationalExpression::SEMIJOIN) {
+      edge->expr->right->type == RelationalExpression::SEMIJOIN) { // 如果是 t1 left join (t2 semijoin t3 on true) on xxx 形式
     // Check if there is a condition connecting the left side of the outer
     // join and inner side of the semijoin. This is a deviation from the
     // definition of a semijoin which makes it not possible to execute such
@@ -4695,7 +4717,7 @@ void CostingReceiver::ProposeNestedLoopJoin(
   assert(BitsetsAreCommitted(right_path));
 
   // FULL OUTER JOIN is not possible with nested-loop join.
-  assert(edge->expr->type != RelationalExpression::FULL_OUTER_JOIN);
+  // assert(edge->expr->type != RelationalExpression::FULL_OUTER_JOIN);
 
   AccessPath join_path;
   join_path.type = AccessPath::NESTED_LOOP_JOIN;
@@ -4938,7 +4960,7 @@ double CostingReceiver::FindAlreadyAppliedSelectivity(
     const JoinPredicate *edge, const AccessPath *left_path,
     const AccessPath *right_path, NodeMap left, NodeMap right) {
   double already_applied = 1.0;
-  for (size_t join_cond_idx = 0;
+  for (size_t join_cond_idx = 0;  // 遍历  edge->expr->equijoin_conditions
        join_cond_idx < edge->expr->equijoin_conditions.size();
        ++join_cond_idx) {
     Item_eq_base *condition = edge->expr->equijoin_conditions[join_cond_idx];
@@ -6113,7 +6135,7 @@ uint64_t FindSargableFullTextPredicates(const JoinHypergraph &graph) {
 // Inject casts into comparisons of expressions with incompatible types.
 // For example, int_col = string_col is rewritten to
 // CAST(int_col AS DOUBLE) = CAST(string_col AS DOUBLE)
-bool InjectCastNodes(JoinHypergraph *graph) {
+bool InjectCastNodes(JoinHypergraph *graph) { // 把 graph->predicates 的 condition，还有 graph->edges 的 expr join_predicate_last、join_conditions，还有的 join->fields、join->group_list.order、join->having_cond 不兼容的数据类型比较转换成兼容的类型
   // Inject cast nodes into the WHERE clause.
   for (Predicate &predicate :
        make_array(graph->predicates.data(), graph->num_where_predicates)) {
@@ -6364,7 +6386,7 @@ AccessPath MakeSortPathForDistinct(
   return sort_path;
 }
 
-JoinHypergraph::Node *FindNodeWithTable(JoinHypergraph *graph, TABLE *table) {
+JoinHypergraph::Node *FindNodeWithTable(JoinHypergraph *graph, TABLE *table) {  // 根据表查找 JoinHypergraph::Node
   for (JoinHypergraph::Node &node : graph->nodes) {
     if (node.table == table) {
       return &node;
@@ -7030,9 +7052,9 @@ static Prealloced_array<AccessPath *, 4> ApplyWindowFunctions(
   Find out if "value" has a type which is compatible with "field" so that it can
   be used for an index lookup if there is an index on "field".
  */
-static bool CompatibleTypesForIndexLookup(Item_func_eq *eq_item, Field *field,
+static bool CompatibleTypesForIndexLookup(Item_func_eq *eq_item, Field *field,  // 在应用索引时，检查 field 和 value 的字段类型是否一致，涉及因素：比较类型、数据类型、字符集类型
                                           Item *value) {
-  if (!comparable_in_index(eq_item, field, Field::itRAW, eq_item->functype(),
+  if (!comparable_in_index(eq_item, field, Field::itRAW, eq_item->functype(),   // 在应用索引时，检查 field 和 value 的字段类型是否一致，涉及因素：比较类型、数据类型、字符集类型
                            value)) {
     // The types are not comparable in the index, so it's not sargable.
     return false;
@@ -7062,13 +7084,13 @@ static bool CompatibleTypesForIndexLookup(Item_func_eq *eq_item, Field *field,
      (predicate_index = -1). This will never happen for WHERE conditions,
      only for join conditions.
  */
-static void PossiblyAddSargableCondition(THD *thd, Item *item,
-                                         const CompanionSet &companion_set,
-                                         TABLE *force_table,
+static void PossiblyAddSargableCondition(THD *thd, Item *item,  // 1、只处理 = 等式  2、根据表查找 JoinHypergraph::Node 3、在应用索引时，检查 field 和 value 的字段类型是否一致，涉及因素：比较类型、数据类型、字符集类型
+                                         const CompanionSet &companion_set, // 4、// t1.x = t1.y + t2.x 这种形式无法走索引 5、如果predicate_index 为 -1 则表示还没注册的 predicate，添加到 graph->predicates、graph->sargable_join_predicates 中
+                                         TABLE *force_table,  // 最后，如果可以应用索引，则把它放到 JoinHypergraph::Node->sargable_predicates
                                          int predicate_index,
                                          bool is_join_condition,
-                                         JoinHypergraph *graph, string *trace) {
-  if (!is_function_of_type(item, Item_func::EQ_FUNC)) {
+                                         JoinHypergraph *graph, string *trace) {  // 如果 item 可以应用索引，则把它 放到 JoinHypergraph::Node->sargable_predicates
+  if (!is_function_of_type(item, Item_func::EQ_FUNC)) { // 只处理 = 等式
     return;
   }
   Item_func_eq *eq_item = down_cast<Item_func_eq *>(item);
@@ -7096,7 +7118,7 @@ static void PossiblyAddSargableCondition(THD *thd, Item *item,
       // Can't use index lookups on this table, so not sargable.
       continue;
     }
-    JoinHypergraph::Node *node = FindNodeWithTable(graph, table);
+    JoinHypergraph::Node *node = FindNodeWithTable(graph, table);  // 根据表查找 JoinHypergraph::Node
     if (node == nullptr) {
       // A field in a different query block, so not sargable for us.
       continue;
@@ -7107,21 +7129,21 @@ static void PossiblyAddSargableCondition(THD *thd, Item *item,
     // need to check more thoroughly if the types are compatible.
     if (eq_item->source_multiple_equality != nullptr) {
       assert(CompatibleTypesForIndexLookup(eq_item, field, right));
-    } else if (!CompatibleTypesForIndexLookup(eq_item, field, right)) {
+    } else if (!CompatibleTypesForIndexLookup(eq_item, field, right)) {  // 在应用索引时，检查 field 和 value 的字段类型是否一致，涉及因素：比较类型、数据类型、字符集类型
       continue;
     }
 
     const table_map used_tables_left = table->pos_in_table_list->map();
     const table_map used_tables_right = right->used_tables();
 
-    if (Overlaps(used_tables_left, used_tables_right)) {
+    if (Overlaps(used_tables_left, used_tables_right)) {  // t1.x = t1.y + t2.x 这种形式无法走索引
       // Not sargable if the tables on the left and right side overlap, such as
       // t1.x = t1.y + t2.x. Will not be sargable in the opposite direction
       // either, so "break" instead of "continue".
       break;
     }
 
-    if (Overlaps(used_tables_right, RAND_TABLE_BIT)) {
+    if (Overlaps(used_tables_right, RAND_TABLE_BIT)) {  // 同上
       // Non-deterministic predicates are not sargable. Will not be sargable in
       // the opposite direction either, so "break" instead of "continue".
       break;
@@ -7136,7 +7158,7 @@ static void PossiblyAddSargableCondition(THD *thd, Item *item,
       }
     }
 
-    if (predicate_index == -1) {
+    if (predicate_index == -1) {  // 还没注册的 predicate，添加到 graph->predicates、graph->sargable_join_predicates 中
       // This predicate is not already registered as a predicate
       // (which means in practice that it's a join predicate,
       // not a WHERE predicate), so add it so that we can refer
@@ -7164,7 +7186,7 @@ static void PossiblyAddSargableCondition(THD *thd, Item *item,
                               !right->has_subquery() &&
                               !right->cost().IsExpensive();
 
-    node->sargable_predicates.push_back(
+    node->sargable_predicates.push_back(  // 把它放到 graph->nodes->sargable_predicates
         {predicate_index, field, right, can_evaluate});
 
     // No need to check the opposite order. We have no indexes on constants.
@@ -7180,26 +7202,26 @@ static void PossiblyAddSargableCondition(THD *thd, Item *item,
 //
 // TODO(sgunders): Integrate with the range optimizer, or find some other way
 // of accepting <, >, <= and >= predicates.
-void FindSargablePredicates(THD *thd, string *trace, JoinHypergraph *graph) {
+void FindSargablePredicates(THD *thd, string *trace, JoinHypergraph *graph) { // 1、遍历 graph->nodes、遍历 node.join_conditions_pushable_to_this 2、如果 graph->predicates[i].condition 可以应用索引，则把它 放到 JoinHypergraph::Node->sargable_predicates
   if (trace != nullptr) {
     *trace += "\n";
   }
 
   for (unsigned i = 0; i < graph->num_where_predicates; ++i) {
-    if (has_single_bit(graph->predicates[i].total_eligibility_set)) {
-      PossiblyAddSargableCondition(thd, graph->predicates[i].condition,
+    if (has_single_bit(graph->predicates[i].total_eligibility_set)) { // 如果是单表
+      PossiblyAddSargableCondition(thd, graph->predicates[i].condition,  // 如果 graph->predicates[i].condition 可以应用索引，则把它 放到 JoinHypergraph::Node->sargable_predicates
                                    CompanionSet(),
                                    /*force_table=*/nullptr, i,
                                    /*is_join_condition=*/false, graph, trace);
     }
   }
-  for (JoinHypergraph::Node &node : graph->nodes) {
-    for (Item *cond : node.join_conditions_pushable_to_this) {
+  for (JoinHypergraph::Node &node : graph->nodes) { // 遍历 graph->nodes
+    for (Item *cond : node.join_conditions_pushable_to_this) {  // 遍历 node.join_conditions_pushable_to_this
       const auto it = graph->sargable_join_predicates.find(cond);
-      int predicate_index =
+      int predicate_index = // 如果在 graph->sargable_join_predicates 没找到 node.join_conditions_pushable_to_this 的迭代器，则 predicate_index = 1
           (it == graph->sargable_join_predicates.end()) ? -1 : it->second;
-      PossiblyAddSargableCondition(thd, cond, *node.companion_set, node.table,
-                                   predicate_index,
+      PossiblyAddSargableCondition(thd, cond, *node.companion_set, node.table,  // 如果 graph->predicates[i].condition 可以应用索引，则把它 放到 JoinHypergraph::Node->sargable_predicates
+                                   predicate_index, // 如果predicate_index 为 -1 则表示还没注册的 predicate，添加到 graph->predicates、graph->sargable_join_predicates 中
                                    /*is_join_condition=*/true, graph, trace);
     }
   }
@@ -7219,14 +7241,14 @@ static bool ComesFromSameMultiEquality(Item *cond1, Item_eq_base *cond2) {
   virtual function calls that we would like to avoid doing every time
   we consider a given join.
  */
-static void CacheCostInfoForJoinConditions(THD *thd,
-                                           const Query_block *query_block,
+static void CacheCostInfoForJoinConditions(THD *thd,  // 1、遍历 edge.expr->equijoin_conditions，构造 CachedPropertiesForPredicate，然后放进 edge.expr->properties_for_equijoin_conditions
+                                           const Query_block *query_block,  // 2、遍历 edge.expr->join_conditions，构造 CachedPropertiesForPredicate，然后放进 edge.expr->properties_for_join_conditions
                                            JoinHypergraph *graph,
                                            string *trace) {
-  for (JoinPredicate &edge : graph->edges) {
+  for (JoinPredicate &edge : graph->edges) {  // 遍历 graph->edges
     edge.expr->properties_for_equijoin_conditions.init(thd->mem_root);
     edge.expr->properties_for_join_conditions.init(thd->mem_root);
-    for (Item_eq_base *cond : edge.expr->equijoin_conditions) {
+    for (Item_eq_base *cond : edge.expr->equijoin_conditions) {  // 遍历 edge.expr->equijoin_conditions，构造 CachedPropertiesForPredicate，然后放进 edge.expr->properties_for_equijoin_conditions
       CachedPropertiesForPredicate properties;
       properties.selectivity =
           EstimateSelectivity(thd, cond, *edge.expr->companion_set, trace);
@@ -7253,7 +7275,7 @@ static void CacheCostInfoForJoinConditions(THD *thd,
       edge.expr->properties_for_equijoin_conditions.push_back(
           std::move(properties));
     }
-    for (Item *cond : edge.expr->join_conditions) {
+    for (Item *cond : edge.expr->join_conditions) {  // 遍历 edge.expr->join_conditions，构造 CachedPropertiesForPredicate，然后放进 edge.expr->properties_for_join_conditions
       CachedPropertiesForPredicate properties;
       properties.selectivity =
           EstimateSelectivity(thd, cond, CompanionSet(), trace);
@@ -7430,7 +7452,7 @@ static AccessPath *FindBestQueryPlanInner(THD *thd, Query_block *query_block,
                                           bool *retry, int *subgraph_pair_limit,
                                           string *trace) {
   JOIN *join = query_block->join;
-  if (CheckSupportedQuery(thd)) return nullptr;
+  if (CheckSupportedQuery(thd)) return nullptr; // 判断存储引擎是否支持 hypergraph
 
   // The hypergraph optimizer does not do const tables,
   // nor does it evaluate subqueries during optimization.
@@ -7459,9 +7481,9 @@ static AccessPath *FindBestQueryPlanInner(THD *thd, Query_block *query_block,
   // keep.
 
   // Convert the join structures into a hypergraph.
-  JoinHypergraph graph(thd->mem_root, query_block);
+  JoinHypergraph graph(thd->mem_root, query_block); // 把 query_block 赋值给 graph->m_query_block
   bool where_is_always_false = false;
-  if (MakeJoinHypergraph(thd, trace, &graph, &where_is_always_false)) {
+  if (MakeJoinHypergraph(thd, trace, &graph, &where_is_always_false)) { // 构建 JoinHypergraph
     return nullptr;
   }
 
@@ -7474,15 +7496,15 @@ static AccessPath *FindBestQueryPlanInner(THD *thd, Query_block *query_block,
     return CreateZeroRowsForEmptyJoin(join, "WHERE condition is always false");
   }
 
-  FindSargablePredicates(thd, trace, &graph);
+  FindSargablePredicates(thd, trace, &graph); // 1、遍历 graph->nodes、遍历 node.join_conditions_pushable_to_this 2、如果 graph->predicates[i].condition 可以应用索引，则把它 放到 JoinHypergraph::Node->sargable_predicates
 
   // Now that we have all join conditions, cache some properties
   // that we'd like to use many times.
-  CacheCostInfoForJoinConditions(thd, query_block, &graph, trace);
+  CacheCostInfoForJoinConditions(thd, query_block, &graph, trace);  // 1、遍历 edge.expr->equijoin_conditions，构造 CachedPropertiesForPredicate，然后放进 edge.expr->properties_for_equijoin_conditions  2、遍历 edge.expr->join_conditions，构造 CachedPropertiesForPredicate，然后放进 edge.expr->properties_for_join_conditions
 
   // Figure out if any later sort will need row IDs.
   bool need_rowid = false;
-  if (query_block->is_explicitly_grouped() || join->order.order != nullptr ||
+  if (query_block->is_explicitly_grouped() || join->order.order != nullptr || // 如果有 group、order、distinct、windows SQL 其中任何一个，则需要 rowid
       join->select_distinct || !join->m_windows.is_empty()) {
     // NOTE: This is distinct from SortWillBeOnRowId(), as it also checks blob
     // fields arising from blob-generating functions on non-blob fields.
@@ -7500,7 +7522,7 @@ static AccessPath *FindBestQueryPlanInner(THD *thd, Query_block *query_block,
     }
   }
 
-  // Find out which predicates contain subqueries.
+  // Find out which predicates contain subqueries.  // 如果谓词中有子查询，则标记要物化，记录在 graph.materializable_predicates 中
   MutableOverflowBitset materializable_predicates{thd->mem_root,
                                                   graph.predicates.size()};
   for (unsigned i = 0; i < graph.predicates.size(); ++i) {
@@ -7525,7 +7547,7 @@ static AccessPath *FindBestQueryPlanInner(THD *thd, Query_block *query_block,
 
   NodeMap fulltext_tables = 0;
   uint64_t sargable_fulltext_predicates = 0;
-  if (query_block->has_ft_funcs()) {
+  if (query_block->has_ft_funcs()) {  // 如果 query_block 有全文检索函数
     fulltext_tables = FindFullTextSearchedTables(graph);
 
     // Check if we have full-text indexes that can be used.
@@ -7548,7 +7570,7 @@ static AccessPath *FindBestQueryPlanInner(THD *thd, Query_block *query_block,
       &order_by_ordering_idx, &group_by_ordering_idx, &distinct_ordering_idx,
       &active_indexes, &spatial_indexes, &fulltext_searches, trace);
 
-  if (InjectCastNodes(&graph)) return nullptr;
+  if (InjectCastNodes(&graph)) return nullptr; // 把 graph->predicates 的 condition，还有 graph->edges 的 expr join_predicate_last、join_conditions，还有的 join->fields、join->group_list.order、join->having_cond 不兼容的数据类型比较转换成兼容的类型
 
   // Run the actual join optimizer algorithm. This creates an access path
   // for the join as a whole (with lowest possible cost, and thus also
@@ -7556,7 +7578,7 @@ static AccessPath *FindBestQueryPlanInner(THD *thd, Query_block *query_block,
   if (trace != nullptr) {
     *trace += "\nEnumerating subplans:\n";
   }
-  for (const JoinHypergraph::Node &node : graph.nodes) {
+  for (const JoinHypergraph::Node &node : graph.nodes) {  // 初始化每个 graph.nodes.table 的代价模型
     node.table->init_cost_model(thd->cost_model());
   }
   const secondary_engine_modify_access_path_cost_t secondary_engine_cost_hook =
