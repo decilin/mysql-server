@@ -4566,7 +4566,7 @@ static bool build_equal_items_for_cond(THD *thd, Item *cond, Item **retcond,
   @param do_inherit          whether or not to inherit equalities from other
                              parts of the condition
   @param join_list           list of join tables that the condition refers to
-  @param[out] cond_equal_ref pointer to the structure to place built
+  @param[out] cond_equal_ref pointer to the structure to place builtoptimize_cond(
                              equalities in
 
   @returns false if success, true if error
@@ -10529,9 +10529,9 @@ static bool can_evaluate_condition(THD *thd, Item *condition) {
   Calls fold_condition. If that made the condition constant for execution,
   simplify and fold again. @see fold_condition() for arguments.
 */
-static bool fold_condition_exec(THD *thd, Item *cond, Item **retcond,
+static bool fold_condition_exec(THD *thd, Item *cond, Item **retcond,//   // 折叠条件: 1、只处理 cond 类型为 Item::FUNC_ITEM 或 Item::COND_ITEM 的情况 2、如果是 Item::COND_ITEM，则遍历 cond->argument_list()，对其中的每个条件项执行 fold_condition 函数，最后更新 used_tables_cache 3、如果是 Item::COND_ITEM 类型，3.1 如果不是 <字段 运算符 常量> 这种形式则执行 fold_arguments 函数 3.2 如果是 <字段 运算符 常量> 这种形式，则对运算符、常量进行转换 3.3 最后把 retcond 构造成 Item_bool_func2
                                 Item::cond_result *cond_value) {
-  if (fold_condition(thd, cond, retcond, cond_value)) return true;
+  if (fold_condition(thd, cond, retcond, cond_value)) return true;  // 折叠条件: 1、只处理 cond 类型为 Item::FUNC_ITEM 或 Item::COND_ITEM 的情况 2、如果是 Item::COND_ITEM，则遍历 cond->argument_list()，对其中的每个条件项执行 fold_condition 函数，最后更新 used_tables_cache 3、如果是 Item::COND_ITEM 类型，3.1 如果不是 <字段 运算符 常量> 这种形式则执行 fold_arguments 函数 3.2 如果是 <字段 运算符 常量> 这种形式，则对运算符、常量进行转换 3.3 最后把 retcond 构造成 Item_bool_func2
   if (*retcond != nullptr &&
       can_evaluate_condition(thd, *retcond))  // simplify further maybe
     return remove_eq_conds(thd, *retcond, retcond, cond_value);
@@ -10551,10 +10551,10 @@ static bool fold_condition_exec(THD *thd, Item *cond, Item **retcond,
 
   @returns false if success, true if error
 */
-bool remove_eq_conds(THD *thd, Item *cond, Item **retcond,
-                     Item::cond_result *cond_value) {
+bool remove_eq_conds(THD *thd, Item *cond, Item **retcond,  // 1、如果 cond 是  Item::COND_ITEM 类型，则遍历其中的 Item，然后执行 remove_eq_conds
+                     Item::cond_result *cond_value) {  // 折叠条件: 1、只处理 cond 类型为 Item::FUNC_ITEM 或 Item::COND_ITEM 的情况 2、如果是 Item::COND_ITEM，则遍历 cond->argument_list()，对其中的每个条件项执行 fold_condition 函数，最后更新 used_tables_cache 3、如果是 Item::COND_ITEM 类型，3.1 如果不是 <字段 运算符 常量> 这种形式则执行 fold_arguments 函数 3.2 如果是 <字段 运算符 常量> 这种形式，则对运算符、常量进行转换 3.3 最后把 retcond 构造成 Item_bool_func2
   assert(cond->real_item()->is_bool_func());
-  if (cond->type() == Item::COND_ITEM) {
+  if (cond->type() == Item::COND_ITEM) {  // 1、如果 cond 是  Item::COND_ITEM 类型，则遍历其中的 Item，然后执行 remove_eq_conds
     Item_cond *const item_cond = down_cast<Item_cond *>(cond);
     const bool and_level = item_cond->functype() == Item_func::COND_AND_FUNC;
     List_iterator<Item> li(*item_cond->argument_list());
@@ -10638,14 +10638,14 @@ bool remove_eq_conds(THD *thd, Item *cond, Item **retcond,
     }
   } else if (can_evaluate_condition(thd, cond)) {
     bool value;
-    if (eval_const_cond(thd, cond, &value)) return true;
+    if (eval_const_cond(thd, cond, &value)) return true; // 计算 cond 的 bool 值，存放到 value
     *cond_value = value ? Item::COND_TRUE : Item::COND_FALSE;
     *retcond = nullptr;
     return false;
   } else {  // Boolean compare function
     *cond_value = cond->eq_cmp_result();
     if (*cond_value == Item::COND_OK) {
-      return fold_condition_exec(thd, cond, retcond, cond_value);
+      return fold_condition_exec(thd, cond, retcond, cond_value);  // 折叠条件: 1、只处理 cond 类型为 Item::FUNC_ITEM 或 Item::COND_ITEM 的情况 2、如果是 Item::COND_ITEM，则遍历 cond->argument_list()，对其中的每个条件项执行 fold_condition 函数，最后更新 used_tables_cache 3、如果是 Item::COND_ITEM 类型，3.1 如果不是 <字段 运算符 常量> 这种形式则执行 fold_arguments 函数 3.2 如果是 <字段 运算符 常量> 这种形式，则对运算符、常量进行转换 3.3 最后把 retcond 构造成 Item_bool_func2
     }
     Item *left_item = down_cast<Item_func *>(cond)->arguments()[0];
     Item *right_item = down_cast<Item_func *>(cond)->arguments()[1];
@@ -10677,7 +10677,7 @@ bool remove_eq_conds(THD *thd, Item *cond, Item **retcond,
       }
     }
   }
-  return fold_condition_exec(thd, cond, retcond, cond_value);
+  return fold_condition_exec(thd, cond, retcond, cond_value);  // 折叠条件: 1、只处理 cond 类型为 Item::FUNC_ITEM 或 Item::COND_ITEM 的情况 2、如果是 Item::COND_ITEM，则遍历 cond->argument_list()，对其中的每个条件项执行 fold_condition 函数，最后更新 used_tables_cache 3、如果是 Item::COND_ITEM 类型，3.1 如果不是 <字段 运算符 常量> 这种形式则执行 fold_arguments 函数 3.2 如果是 <字段 运算符 常量> 这种形式，则对运算符、常量进行转换 3.3 最后把 retcond 构造成 Item_bool_func2
 }
 
 /**

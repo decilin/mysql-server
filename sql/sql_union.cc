@@ -918,21 +918,21 @@ static bool finalize_full_text_functions(THD *thd,
   @param qt  the current query term to optimize
   @returns false on success, true on error
  */
-static bool optimize_set_operand(THD *thd, Query_expression *qe,
-                                 Query_term *qt) {
+static bool optimize_set_operand(THD *thd, Query_expression *qe,  // 1、根据 Query_term 设置 Query_expression 的 LIMIT
+                                 Query_term *qt) {                // 2、如果是 (...) ORDER BY ... LIMIT ... 这种类型的 SQL，或者已经物化，则执行 m_query_block->optimize(thd, /*finalize_access_paths=*/true)。因为没有 ORDER BY ... LIMIT ... 的话，我们可以折叠它
   if (qt->term_type() == QT_QUERY_BLOCK) return false;  // done already
   Query_term_set_op *qts = down_cast<Query_term_set_op *>(qt);
   thd->lex->set_current_query_block(qts->query_block());
 
   // LIMIT is required for optimization
-  if (qe->set_limit(thd, qts->query_block()))
+  if (qe->set_limit(thd, qts->query_block())) // 设置 Query_expression 的 LIMIT
     return true; /* purecov: inspected */
 
-  if ((qts->is_unary() || qts->m_is_materialized) &&
+  if ((qts->is_unary() || qts->m_is_materialized) &&  // 如果是 (...) ORDER BY ... LIMIT ... 这种类型的 SQL，或者已经物化，则执行 m_query_block->optimize(thd, /*finalize_access_paths=*/true)。因为没有 ORDER BY ... LIMIT ... 的话，我们可以折叠它
       qts->query_block()->optimize(thd,
                                    /*finalize_access_paths=*/true))
     return true;
-  for (Query_term *child : qts->m_children) {
+  for (Query_term *child : qts->m_children) { // 遍历 Query_term_set_op 的 m_children，递归执行 optimize_set_operand
     if (optimize_set_operand(thd, qe, child)) return true;
   }
 
@@ -1058,7 +1058,7 @@ bool Query_expression::optimize(THD *thd, TABLE *materialize_destination,
   }
 
   if (!is_simple()) {
-    if (optimize_set_operand(thd, this, query_term())) return true;
+    if (optimize_set_operand(thd, this, query_term())) return true; // 1、根据 Query_term 设置 Query_expression 的 LIMIT  2、如果是 (...) ORDER BY ... LIMIT ... 这种类型的 SQL，或者已经物化，则执行 m_query_block->optimize(thd, /*finalize_access_paths=*/true)。因为没有 ORDER BY ... LIMIT ... 的话，我们可以折叠它   3、遍历 Query_term_set_op 的 m_children，递归执行 optimize_set_operand
     if (set_limit(thd, query_term()->query_block())) return true;
     if (!is_union()) query_result()->set_limit(select_limit_cnt);
   }

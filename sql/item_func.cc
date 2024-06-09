@@ -310,7 +310,7 @@ String *eval_string_arg_noinline(const CHARSET_INFO *to_cs, Item *arg,
   @returns false if evaluation is successful, true otherwise
 */
 
-bool eval_const_cond(THD *thd, Item *cond, bool *value) {
+bool eval_const_cond(THD *thd, Item *cond, bool *value) { // 计算 cond 的 bool 值，存放到 value
   // Function may be used both during resolving and during optimization:
   assert(cond->may_evaluate_const(thd));
   *value = cond->val_bool();

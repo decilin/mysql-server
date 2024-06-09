@@ -732,7 +732,7 @@ static bool ContainsAnyMRRPaths(AccessPath *path) {
   return any_mrr_paths;
 }
 
-Item *CreateConjunction(List<Item> *items) {  // 把 items 转换成 Item_cond_and
+Item *CreateConjunction(List<Item> *items) {  // 把 List<Item> 转换成 Item_cond_and
   if (items->size() == 0) {
     return nullptr;
   }

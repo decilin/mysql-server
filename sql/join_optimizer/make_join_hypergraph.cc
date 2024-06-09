@@ -181,7 +181,7 @@ void ReorderConditions(Mem_root_array<Item *> *condition_parts) { // 重排序 M
  */
 void ExpandSameTableFromMultipleEquals(Item_equal *equal,
                                        table_map tables_in_subtree,
-                                       List<Item> *eq_items) {  // 提取 MultipleEquals 中的多个字段的公共表，比如 equal(t1.a, t2.a, t2.b, t3.a) 会被转换成 t2.a=t2.b AND (original item)。这可以让我们后续把 t2.a=t2.b 下推
+                                       List<Item> *eq_items) {  // 提取 MultipleEquals 中的多个字段的公共表，比如 multi equal(t1.a, t2.a, t2.b, t3.a) 会被转换成 t2.a=t2.b AND (original item)。这可以让我们后续把 t2.a=t2.b 下推
   // Look for pairs of items that touch the same table.
   for (auto it1 = equal->get_fields().begin(); it1 != equal->get_fields().end();
        ++it1) {
@@ -215,13 +215,13 @@ void ExpandSameTableFromMultipleEquals(Item_equal *equal,
   The return value is an AND conjunction, so most likely, it needs to be split.
  */
 Item *EarlyExpandMultipleEquals(Item *condition, table_map tables_in_subtree) { // 在 join 下推前展开 multiple equalities，返回 AND conjunction。1、标量处理，2、常量处理（每个字段填充常量），3、涉及表个数大于2的处理（提取公共表），4、涉及表个数等于2的处理（获取 Item_func_eq）
-  return CompileItem(
+  return CompileItem( // 没有遍历
       condition, [](Item *) { return true; },
       [tables_in_subtree](Item *item) -> Item * {
-        if (!IsMultipleEquals(item)) {
+        if (!IsMultipleEquals(item)) {  // 不是 MultipleEquals 则直接返回
           return item;
         }
-        Item_equal *equal = down_cast<Item_equal *>(item);
+        Item_equal *equal = down_cast<Item_equal *>(item);  // 转换成 Item_equal，它是 MultipleEquals
 
         List<Item> eq_items;
         // If this condition is a constant, do the evaluation
@@ -233,7 +233,7 @@ Item *EarlyExpandMultipleEquals(Item *condition, table_map tables_in_subtree) { 
         // to be "true", as that could happen only when const table
         // optimization is used (It is currently not done for
         // hypergraph).
-        if (equal->const_item() && !equal->val_int()) { // 如果是标量
+        if (equal->const_item() && !equal->val_int()) { // val_int() 返回0的情况：1、条件结果是 false 2、第一个字段是 null_value 3、剩余的字段存在 null_value
           eq_items.push_back(new Item_func_false);
         } else if (equal->const_arg() != nullptr) { // 如果 equal 包含常量
           // If there is a constant element, do a simple expansion.
@@ -289,7 +289,7 @@ Item *EarlyExpandMultipleEquals(Item *condition, table_map tables_in_subtree) { 
           }
         }
         assert(!eq_items.is_empty());
-        return CreateConjunction(&eq_items);
+        return CreateConjunction(&eq_items);  // 把 List<Item> 转换成 Item_cond_and
       });
 }
 
@@ -1631,7 +1631,7 @@ void PushDownCondition(Item *cond, RelationalExpression *expr,  // 尽量把 con
   // We can ignore the special case of a multi-equality referring to several
   // fields in the same table, as ExpandSameTableFromMultipleEquals()
   // has dealt with those for us.
-  if (IsMultipleEquals(cond)) {
+  if (IsMultipleEquals(cond)) { // 比如 (A.ID,B.ID,C.ID) 遇到 (A JOIN B) JOIN C。可以把 (A.ID,B.ID) 下推到左边，也就是 (A JOIN B) 
     table_map left_tables = cond->used_tables() & expr->left->tables_in_subtree;
     table_map right_tables =
         cond->used_tables() & expr->right->tables_in_subtree;
@@ -1842,7 +1842,7 @@ Mem_root_array<Item *> PushDownAsMuchAsPossible(  // 遍历 conditions 数组，
     Mem_root_array<Item *> *cycle_inducing_edges, string *trace) {
   Mem_root_array<Item *> remaining_parts(thd->mem_root);
   for (Item *item : conditions) {
-    if (popcount(item->used_tables() & ~PSEUDO_TABLE_BITS) < 2 &&
+    if (popcount(item->used_tables() & ~PSEUDO_TABLE_BITS) < 2 && // where 中的过滤条件不会下推
         !is_join_condition_for_expr) {
       // Simple filters will stay in WHERE; we go through them with
       // AddPredicate() (in MakeJoinHypergraph()) and convert them into
@@ -1854,11 +1854,11 @@ Mem_root_array<Item *> PushDownAsMuchAsPossible(  // 遍历 conditions 数组，
       // be sent through PushDownCondition() below, and possibly end up
       // in table_filters.
       remaining_parts.push_back(item);
-    } else if (is_join_condition_for_expr && !IsMultipleEquals(item) &&
+    } else if (is_join_condition_for_expr && !IsMultipleEquals(item) && // join 条件中的条件项，如果不是 MultipleEquals, 也不是  expr->tables_in_subtree 的子集，也不会下推
                !IsSubset(item->used_tables() & ~PSEUDO_TABLE_BITS,
                          expr->tables_in_subtree)) {
       // Condition refers to tables outside this subtree, so it can not be
-      // pushed (this can only happen with semijoins).
+      // pushed (this can only happen with semijoins).  // ??? 为什么 semijoins 的 expr->tables_in_subtree 会出现这种情况
       remaining_parts.push_back(item);
     } else {
       PushDownCondition(item, expr, is_join_condition_for_expr,
@@ -2288,7 +2288,7 @@ bool EarlyNormalizeConditions(THD *thd, RelationalExpression *join,  // 总体�
 
     const Item *const old_item = *it;
     Item::cond_result res;
-    if (remove_eq_conds(thd, *it, &*it, &res)) {  // 移除常量和 eq items，结果放在 res 中，然后检查 res 是 Item::COND_TRUE 还是 Item::COND_FALSE
+    if (remove_eq_conds(thd, *it, &*it, &res)) {  // 如果 cond 是  Item::COND_ITEM 类型，则遍历其中的 Item，然后执行 remove_eq_conds。  折叠条件: 1、只处理 cond 类型为 Item::FUNC_ITEM 或 Item::COND_ITEM 的情况 2、如果是 Item::COND_ITEM，则遍历 cond->argument_list()，对其中的每个条件项执行 fold_condition 函数，最后更新 used_tables_cache 3、如果是 Item::COND_ITEM 类型，3.1 如果不是 <字段 运算符 常量> 这种形式则执行 fold_arguments 函数 3.2 如果是 <字段 运算符 常量> 这种形式，则对运算符、常量进行转换 3.3 最后把 retcond 构造成 Item_bool_func2
       return true;
     }
 
@@ -3538,7 +3538,7 @@ bool MakeJoinHypergraph(THD *thd, string *trace, JoinHypergraph *graph,
   Mem_root_array<Item *> table_filters(thd->mem_root);
   Mem_root_array<Item *> cycle_inducing_edges(thd->mem_root);
   PushDownJoinConditions(thd, root, companion_collection, &table_filters, // 把整个 expr->join_conditions 下推，递归 expr->left、expr->right 或者 expr->multi_children
-                         &cycle_inducing_edges, trace);
+                         &cycle_inducing_edges, trace); // 整体流程中还没给 CompanionSet 添加数据
 
   // Split up WHERE conditions, and push them down into the tree as much as
   // we can. (They have earlier been hoisted up as far as possible; see

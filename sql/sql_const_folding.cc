@@ -227,7 +227,7 @@ static bool analyze_int_field_constant(THD *thd, Item_field *f,
                                        Item **const_val, Item_func::Functype ft,
                                        bool left_has_field,
                                        Range_placement *place,
-                                       bool *discount_equal) {
+                                       bool *discount_equal) {  // 分析整型字段 Item_field *f 的数据类型 和 Item **const_val 的边界关系，然后给 place 赋值，比如 RP_OUTSIDE_LOW、RP_OUTSIDE_HIGH、RP_ON_MIN、RP_ON_MAX
   const bool field_unsigned = f->unsigned_flag;
   my_decimal *d = nullptr;
   my_decimal dec;
@@ -455,7 +455,7 @@ static bool analyze_decimal_field_constant(THD *thd, const Item_field *f,
                                            Item **const_val,
                                            Item_func::Functype ft,
                                            Range_placement *place,
-                                           bool *negative) {
+                                           bool *negative) {  // 分析 decimal 字段 Item_field *f 的数据类型 和 Item **const_val 的数据类型，然后进行类型转换
   const auto fd = down_cast<const Field_new_decimal *>(f->field);
   const int f_frac = fd->dec;
   const int f_intg = fd->precision - f_frac;
@@ -995,7 +995,7 @@ static bool analyze_time_field_constant(THD *thd, Item **const_val) {
 static bool analyze_field_constant(THD *thd, Item_field *f, Item **const_val,
                                    Item_func *func, bool left_has_field,
                                    Range_placement *place, bool *discount_equal,
-                                   bool *negative) {
+                                   bool *negative) {   // 分析字段 Item_field *f 的数据类型 和 Item **const_val 的边界关系，然后给 place 赋值，比如 RP_OUTSIDE_LOW、RP_OUTSIDE_HIGH、RP_ON_MIN、RP_ON_MAX
   *place = RP_INSIDE;  // a priori
 
   if ((*const_val)->is_null()) return false;
@@ -1008,7 +1008,7 @@ static bool analyze_field_constant(THD *thd, Item_field *f, Item **const_val,
     case MYSQL_TYPE_INT24:
     case MYSQL_TYPE_LONG:
     case MYSQL_TYPE_LONGLONG:
-      return analyze_int_field_constant(thd, f, const_val, ft, left_has_field,
+      return analyze_int_field_constant(thd, f, const_val, ft, left_has_field,    // 分析字段 Item_field *f 的数据类型 和 Item **const_val 的边界关系，然后给 place 赋值，比如 RP_OUTSIDE_LOW、RP_OUTSIDE_HIGH、RP_ON_MIN、RP_ON_MAX
                                         place, discount_equal);
     case MYSQL_TYPE_NEWDECIMAL:
       return analyze_decimal_field_constant(thd, f, const_val, ft, place,
@@ -1126,7 +1126,7 @@ static bool fold_or_simplify(THD *thd, Item *ref_or_field,
   @param cond   the function
   @returns true on error
 */
-static bool fold_arguments(THD *thd, Item_func *func) {
+static bool fold_arguments(THD *thd, Item_func *func) { // 遍历 Item_func 的每个参数 X，然后对 X 进行条件折叠
   for (uint i = 0; i < func->argument_count(); i++) {
     Item::cond_result cv;
     Item **args = func->arguments();
@@ -1143,7 +1143,7 @@ static bool fold_arguments(THD *thd, Item_func *func) {
  @param cond   the condition
  @returns true on error
  */
-static bool fold_arguments(THD *thd, Item_cond *cond) {
+static bool fold_arguments(THD *thd, Item_cond *cond) { // 遍历 cond->argument_list()，对其中的每个条件项执行 fold_condition 函数，最后更新 used_tables_cache
   List_iterator<Item> li(*cond->argument_list());
   Item *item;
 
@@ -1201,7 +1201,7 @@ static Range_placement map_less_to_greater(Range_placement place) {
   @param[in,out] retcond        the resulting condition
   @returns true on error
 */
-static bool adjust_cmp_op(THD *thd, Item_func *func, bool left_has_field,
+static bool adjust_cmp_op(THD *thd, Item_func *func, bool left_has_field, // 把 < 转换成 <= ,或者 > 转换成 >=，或者 <= 转换成 <,或者  >= 转换成 >
                           bool inverse, Item *ref_or_field, Item *c,
                           Item **retcond) {
   if (inverse) {
@@ -1241,7 +1241,7 @@ static bool adjust_cmp_op(THD *thd, Item_func *func, bool left_has_field,
                       the resulting condition value
   @returns true on error
 */
-static bool simplify_to_equal(THD *thd, Item *ref_or_field, Item *c,
+static bool simplify_to_equal(THD *thd, Item *ref_or_field, Item *c,  // 构造 Item_func_eq(ref_or_field, c)，然后用这个新对象替换 Item **retcond
                               Item **retcond, Item::cond_result *cond_value) {
   Item *eq = new (thd->mem_root) Item_func_eq(ref_or_field, c);
   if (eq == nullptr) return true;
@@ -1252,8 +1252,8 @@ static bool simplify_to_equal(THD *thd, Item *ref_or_field, Item *c,
 }
 
 // Main entrypoint for this module. See Doxygen comments in sql_const_folding.h
-bool fold_condition(THD *thd, Item *cond, Item **retcond,
-                    Item::cond_result *cond_value, bool manifest_result) {
+bool fold_condition(THD *thd, Item *cond, Item **retcond, // 折叠条件，1、只处理 cond 类型为 Item::FUNC_ITEM 或 Item::COND_ITEM 的情况 2、如果是 Item::COND_ITEM，则遍历 cond->argument_list()，对其中的每个条件项执行 fold_condition 函数，最后更新 used_tables_cache
+                    Item::cond_result *cond_value, bool manifest_result) {  // 3、如果是 Item::COND_ITEM 类型，3.1 如果不是 <字段 运算符 常量> 这种形式则执行 fold_arguments 函数 3.2 如果是 <字段 运算符 常量> 这种形式，则对运算符、常量进行转换 3.3 最后把 retcond 构造成 Item_bool_func2
   uchar buff[STACK_BUFF_ALLOC];  // Max argument in function
   if (check_stack_overrun(thd, STACK_MIN_SIZE * 2, buff))
     return true;  // Fatal error if flag is set
@@ -1263,18 +1263,18 @@ bool fold_condition(THD *thd, Item *cond, Item **retcond,
   *retcond = cond;
 
   const Item::Type cond_type = cond->type();
-  if (!(cond_type == Item::FUNC_ITEM || cond_type == Item::COND_ITEM))
+  if (!(cond_type == Item::FUNC_ITEM || cond_type == Item::COND_ITEM))  // 如果 cond 不是 Item::FUNC_ITEM 或者 Item::COND_ITEM 则返回 false 
     return false;
 
   if (cond_type == Item::COND_ITEM) {
     const auto and_or = down_cast<Item_cond *>(cond);
-    return fold_arguments(thd, and_or);
+    return fold_arguments(thd, and_or); // 遍历 cond->argument_list()，对其中的每个条件项执行 fold_condition 函数，最后更新 used_tables_cache
   }
 
-  Item_func *const func = down_cast<Item_func *>(cond);
+  Item_func *const func = down_cast<Item_func *>(cond); // 以下是处理 Item::FUNC_ITEM 类型
   Item_func::Functype func_type = func->functype();
 
-  switch (func_type) {
+  switch (func_type) {  // 对 is not null、=、<>、<、<=、>=、>、EQUAL_FUNC、MULT_EQUAL_FUNC 进行处理
     case Item_func::ISNOTNULL_FUNC:
       if (func->arguments()[0]->is_nullable()) {
         return fold_arguments(thd, func);
@@ -1304,7 +1304,7 @@ bool fold_condition(THD *thd, Item *cond, Item **retcond,
       return fold_arguments(thd, func);
   }
 
-  Item **args = nullptr;
+  Item **args = nullptr;  // 用来采集 Item_func 中的参数
 
   if (func_type != Item_func::MULT_EQUAL_FUNC) {
     args = func->arguments();
@@ -1364,12 +1364,12 @@ bool fold_condition(THD *thd, Item *cond, Item **retcond,
     }
   }
 
-  if (!(seen_field && seen_constant)) {
+  if (!(seen_field && seen_constant)) { // 如果不是 <字段 运算符 常量> 这种形式
     /*
       This comparison function doesn't have the simple form required, so
       instead, try to fold inside its arguments
     */
-    return fold_arguments(thd, func);
+    return fold_arguments(thd, func);  // 遍历 Item_func 的每个参数 X，然后对 X 运行 fold_condition 函数
   }
 
   const auto arg0_orig = args[0];
@@ -1384,7 +1384,7 @@ bool fold_condition(THD *thd, Item *cond, Item **retcond,
   bool discount_eq = false;
   bool negative = false;  // used for decimal constants only
 
-  if (analyze_field_constant(
+  if (analyze_field_constant(   // 分析字段 Item_field *f 的数据类型 和 Item **const_val 的边界关系，然后给 place 赋值，比如 RP_OUTSIDE_LOW、RP_OUTSIDE_HIGH、RP_ON_MIN、RP_ON_MAX
           thd, down_cast<Item_field *>(args[!left_has_field]->real_item()), c,
           func, left_has_field, &place, &discount_eq, &negative))
     return true; /* purecov: inspected */
@@ -1409,13 +1409,13 @@ bool fold_condition(THD *thd, Item *cond, Item **retcond,
   }
 
   // Fold >, >= handling with <, <=
-  if (func_type == Item_func::GT_FUNC || func_type == Item_func::GE_FUNC) {
+  if (func_type == Item_func::GT_FUNC || func_type == Item_func::GE_FUNC) { // 把  >, >= 分别转换成 <, <=
     place = map_less_to_greater(place);
     func_type = func_type == Item_func::GT_FUNC ? Item_func::LT_FUNC
                                                 : Item_func::LE_FUNC;
   }
 
-  switch (func_type) {
+  switch (func_type) {  // 对表达式中的数值边界进行处理，比如 tinyint: f <= -128 (signed), or f <= 0 (unsigned) 改写成 f = <min>
     case Item_func::EQ_FUNC:
     case Item_func::EQUAL_FUNC:
     case Item_func::NE_FUNC:
@@ -1496,7 +1496,7 @@ bool fold_condition(THD *thd, Item *cond, Item **retcond,
                 E.g. tinyint: f <= -128 (signed), or f <= 0 (unsigned):
                 convert to f = <min>
               */
-              if (simplify_to_equal(thd, ref_or_field, *c, retcond, cond_value))
+              if (simplify_to_equal(thd, ref_or_field, *c, retcond, cond_value))  // 构造 Item_func_eq(ref_or_field, c)，然后用这个新对象替换 Item **retcond
                 return true; /* purecov: inspected */
             }
           }  // else no folding
@@ -1557,7 +1557,7 @@ bool fold_condition(THD *thd, Item *cond, Item **retcond,
   if (*retcond == nullptr || (*retcond)->type() != Item::FUNC_ITEM)
     return false;
 
-  switch (down_cast<Item_func *>(*retcond)->functype()) {
+  switch (down_cast<Item_func *>(*retcond)->functype()) { // 把 retcond 构造成 Item_bool_func2
     case Item_func::GE_FUNC:
     case Item_func::GT_FUNC:
     case Item_func::LT_FUNC:
@@ -1568,7 +1568,7 @@ bool fold_condition(THD *thd, Item *cond, Item **retcond,
       const auto new_args = down_cast<Item_bool_func2 *>(*retcond)->arguments();
       if (func != *retcond || new_args[0] != arg0_orig ||
           new_args[1] != arg1_orig)
-        down_cast<Item_bool_func2 *>(*retcond)->set_cmp_func();
+        down_cast<Item_bool_func2 *>(*retcond)->set_cmp_func(); // 把 retcond 构造成 Item_bool_func2
     } break;
     default:
       break;

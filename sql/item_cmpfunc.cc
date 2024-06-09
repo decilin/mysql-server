@@ -7182,18 +7182,18 @@ void Item_equal::update_used_tables() {
   if (m_const_arg != nullptr) used_tables_cache |= m_const_arg->used_tables();
 }
 
-longlong Item_equal::val_int() {
+longlong Item_equal::val_int() {  // 返回0的情况：1、条件结果是 false 2、第一个字段是 null_value 3、剩余的字段存在 null_value
   Item_field *item_field;
   if (cond_false) return 0;
   List_iterator_fast<Item_field> it(fields);
-  Item *item = m_const_arg != nullptr ? m_const_arg : it++;
-  eval_item->store_value(item);
-  if ((null_value = item->null_value)) return 0;
+  Item *item = m_const_arg != nullptr ? m_const_arg : it++; // 第一个是常量，后面的是字段，这里的 item 相当第一个字段
+  eval_item->store_value(item); // 把第一个字段保存到 eval_item
+  if ((null_value = item->null_value)) return 0;  // 如果字段是 null_value 则返回 0
   while ((item_field = it++)) {
     /* Skip fields of non-const tables. They haven't been read yet */
-    if (item_field->field->table->const_table) {
-      const int rc = eval_item->cmp(item_field);
-      if ((rc == static_cast<int>(true)) || (null_value = (rc == UNKNOWN)))
+    if (item_field->field->table->const_table) {  // 剩余字段的表是 const_table，
+      const int rc = eval_item->cmp(item_field);  // cmp 的返回值：左值或者右值有 null_value 则返回 UNKNOWN
+      if ((rc == static_cast<int>(true)) || (null_value = (rc == UNKNOWN))) // rc == static_cast<int>(true): 这部分代码检查 rc 是否等于 true 的整数表示。在 C++ 中，true 的整数表示通常是 1
         return 0;
     }
   }

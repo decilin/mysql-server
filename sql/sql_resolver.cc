@@ -199,7 +199,7 @@ bool Query_block::prepare(THD *thd, mem_root_deque<Item *> *insert_field_list) {
 
   Query_expression *const unit = master_query_expression();
 
-  if (!m_table_nest.empty()) propagate_nullability(&m_table_nest, false); // outer join 算子中，设置 inner tables 为 nullability
+  if (!m_table_nest.empty()) propagate_nullability(&m_table_nest, false);   // 比如 left join t1 on ...，则设置 t1 nullability
 
   /*
     根据查询块的位置确定是否建议合并直接派生的表：
@@ -3916,7 +3916,7 @@ bool Query_block::flatten_subqueries(THD *thd) {
   @param tables  List of tables and join nests, start at m_table_nest
   @param nullable  true: Set all underlying tables as nullable
 */
-void propagate_nullability(mem_root_deque<Table_ref *> *tables, bool nullable) {
+void propagate_nullability(mem_root_deque<Table_ref *> *tables, bool nullable) {  // 比如 left join t1 on ...，则设置 t1 nullability
   for (Table_ref *tr : *tables) {
     if (tr->table && !tr->table->is_nullable() && (nullable || tr->outer_join))
       tr->table->set_nullable();
